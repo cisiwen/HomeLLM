@@ -103,9 +103,11 @@ The service has no console, so to pair a phone, run `homellm.exe pair` in any te
 PC. It shows the QR and asks you to approve in that terminal, using a control port the service
 only listens on locally (`127.0.0.1:8091`).
 
-Keep the PC awake (Windows sleeps after 15 minutes by default) and consider
-`OLLAMA_KEEP_ALIVE=-1`. Otherwise Ollama unloads the model after 5 idle minutes, and the next
-request waits a minute or more while it loads again.
+Keep the PC awake (Windows sleeps after 15 minutes by default) and set `OLLAMA_KEEP_ALIVE` to
+suit you. Ollama unloads the model after that much idle time (5 minutes by default), and the
+next request waits while it loads again: about 10 s, or a minute or more on the first load after
+a reboot. `30m` frees the GPU when you're not chatting without pausing a conversation; `-1`
+keeps the model loaded permanently. Restart Ollama afterwards (`deploy/restart-ollama.ps1`).
 
 ## Data channel protocol
 
