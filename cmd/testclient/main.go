@@ -40,18 +40,28 @@ func main() {
 		prompt      = flag.String("prompt", "Hello from the test client", "message to send")
 		image       = flag.String("image", "", "optional image file to attach")
 		cancelAfter = flag.Duration("cancel-after", 0, "send cancel after this long (tests cancellation)")
+		imagine     = flag.String("imagine", "", "generate an image from this prompt instead of chatting")
+		enhance     = flag.Bool("enhance", false, "with -imagine: let the LLM rewrite the prompt first")
+		out         = flag.String("out", "image.jpg", "with -imagine: where to save the image")
 		timeout     = flag.Duration("timeout", 2*time.Minute, "overall timeout")
 	)
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	if err := run(ctx, *qrJSON, *qrFile, *user, *skipPair, *prompt, *image, *cancelAfter); err != nil {
+	opts := imagineOpts{prompt: *imagine, enhance: *enhance, out: *out}
+	if err := run(ctx, *qrJSON, *qrFile, *user, *skipPair, *prompt, *image, *cancelAfter, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt, image string, cancelAfter time.Duration) error {
+type imagineOpts struct {
+	prompt  string
+	enhance bool
+	out     string
+}
+
+func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt, image string, cancelAfter time.Duration, im imagineOpts) error {
 	if qrFile != "" {
 		b, err := os.ReadFile(qrFile)
 		if err != nil {
@@ -130,9 +140,26 @@ func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt
 			incoming <- p
 		}
 	})
+	// Files from the home server (generated images): file_start, binary chunks, file_end.
+	// Pion delivers one channel's messages in order, so this needs no locking.
+	var fileBuf []byte
+	received := make(chan []byte, 4)
 	files.OnMessage(func(m webrtc.DataChannelMessage) {
+		if !m.IsString {
+			fileBuf = append(fileBuf, m.Data...)
+			return
+		}
 		var p protocol.Peer
-		if json.Unmarshal(m.Data, &p) == nil {
+		if json.Unmarshal(m.Data, &p) != nil {
+			return
+		}
+		switch p.Type {
+		case protocol.PeerFileStart:
+			fileBuf = make([]byte, 0, p.Size)
+		case protocol.PeerFileEnd:
+			received <- fileBuf
+			fileBuf = nil
+		default:
 			incoming <- p
 		}
 	})
@@ -201,7 +228,11 @@ func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt
 	if err != nil {
 		return err
 	}
-	fmt.Printf("home server: name=%q model=%q vision=%v\n", hello.Name, hello.Model, hello.Vision)
+	fmt.Printf("home server: name=%q model=%q vision=%v images=%v\n", hello.Name, hello.Model, hello.Vision, hello.Images)
+	if im.prompt != "" {
+		<-filesOpen
+		return runImagine(ctx, im, func(p protocol.Peer) error { return send(chat, p) }, incoming, received)
+	}
 
 	// 5. Optional image, chunked with flow control.
 	var imageIDs []string
@@ -274,4 +305,44 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// runImagine asks for an image and saves it.
+func runImagine(ctx context.Context, im imagineOpts, send func(protocol.Peer) error, incoming <-chan protocol.Peer, received <-chan []byte) error {
+	id := "img-" + randomHex(4)
+	if err := send(protocol.Peer{Type: protocol.PeerImagine, ID: id, Prompt: im.prompt, Enhance: im.enhance}); err != nil {
+		return err
+	}
+	start := time.Now()
+	var done *protocol.Peer
+	var data []byte
+	for done == nil || data == nil {
+		select {
+		case b := <-received:
+			data = b
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		case p := <-incoming:
+			switch p.Type {
+			case protocol.PeerImagePrompt:
+				fmt.Printf("enhanced prompt: %s\n", p.Prompt)
+			case protocol.PeerImageProgress:
+				if p.Step == 0 {
+					fmt.Printf("[%s] loading model...\n", time.Since(start).Round(100*time.Millisecond))
+				} else {
+					fmt.Printf("[%s] step %d/%d\n", time.Since(start).Round(100*time.Millisecond), p.Step, p.Steps)
+				}
+			case protocol.PeerImageDone:
+				done = &p
+			case protocol.PeerError, protocol.PeerFileError:
+				return fmt.Errorf("home server error: %s", p.Message)
+			}
+		}
+	}
+	if err := os.WriteFile(im.out, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("[done in %s] %dx%d seed=%d, %d bytes -> %s\n", time.Since(start).Round(time.Millisecond), done.Width, done.Height, done.Seed, len(data), im.out)
+	return nil
 }

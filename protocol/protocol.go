@@ -134,9 +134,20 @@ type Peer struct {
 	Delta string `json:"delta,omitempty"`
 	// chat: error / files: file_error
 	Message string `json:"message,omitempty"`
-	// chat: hello reply
+	// chat: hello reply. Images says this server can generate images (PeerImagine).
 	Name   string `json:"name,omitempty"`
 	Vision bool   `json:"vision,omitempty"`
+	Images bool   `json:"images,omitempty"`
+
+	// chat: imagine / image_prompt / image_progress / image_done
+	Prompt  string `json:"prompt,omitempty"`
+	Enhance bool   `json:"enhance,omitempty"`
+	Width   int    `json:"width,omitempty"`
+	Height  int    `json:"height,omitempty"`
+	Seed    int64  `json:"seed,omitempty"`
+	Step    int    `json:"step,omitempty"`
+	Steps   int    `json:"steps,omitempty"`
+	FileID  string `json:"file_id,omitempty"`
 
 	// files: file_start
 	MIME   string `json:"mime,omitempty"`
@@ -156,11 +167,25 @@ const (
 	PeerDone = "done"
 	// chat, home -> phone: {id, message}.
 	PeerError = "error"
-	// chat, phone -> home: {id}. Stops generation.
+	// chat, phone -> home: {id}. Stops generation (text or image).
 	PeerCancel = "cancel"
 
+	// chat, phone -> home: {id, prompt, enhance?, width?, height?, seed?}. Generates an image
+	// from a text prompt; enhance first has the LLM rewrite a short idea into a detailed
+	// English prompt. Failures come back as error {id, message}.
+	PeerImagine = "imagine"
+	// chat, home -> phone: {id, prompt}. The prompt actually used, when enhance rewrote it.
+	PeerImagePrompt = "image_prompt"
+	// chat, home -> phone: {id, step, steps}. Sampling progress.
+	PeerImageProgress = "image_progress"
+	// chat, home -> phone: {id, file_id, width, height, seed}. The image itself arrives on the
+	// files channel as file_id - possibly before or after this message, since the two
+	// channels are independent streams.
+	PeerImageDone = "image_done"
+
 	// files, sender: {id, mime, size, sha256}, then binary chunks, then file_end {id}. Only one
-	// file is in flight per direction at a time, so the binary chunks need no header.
+	// file is in flight per direction at a time, so the binary chunks need no header. Phones
+	// send photos this way; the home server sends generated images.
 	PeerFileStart = "file_start"
 	PeerFileEnd   = "file_end"
 	// files, receiver -> sender: {id, message}.

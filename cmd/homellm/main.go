@@ -5,6 +5,7 @@
 // Console commands while running: "p" + Enter prints a new pairing QR; pairing requests are
 // approved by answering "y". When it runs as a background service with no console,
 // `homellm pair` in any terminal on the same PC does the same (see pairdesk.go).
+// `homellm imagine <prompt>` checks this PC's image generation setup (see imagine.go).
 package main
 
 import (
@@ -33,6 +34,10 @@ func main() {
 		runPairClient(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "imagine" {
+		runImagineCheck(os.Args[2:])
+		return
+	}
 	homeDir, _ := os.UserHomeDir()
 	var (
 		signalURL     = flag.String("signal", "ws://localhost:8090/ws", "signalling WebSocket URL this server connects to")
@@ -43,6 +48,10 @@ func main() {
 		llmURL        = flag.String("llm-url", "http://127.0.0.1:11434", "base URL of the OpenAI-compatible LLM server")
 		model         = flag.String("model", "qwen2.5vl:7b", "default model")
 		vision        = flag.Bool("vision", true, "the default model accepts images")
+		images        = flag.String("images", "", "image generation backend: comfyui or mock (empty = off)")
+		comfyURL      = flag.String("comfy-url", "http://127.0.0.1:8188", "base URL of the ComfyUI server")
+		imageModel    = flag.String("image-model", "flux1-schnell-fp8.safetensors", "ComfyUI checkpoint for image generation")
+		imageSteps    = flag.Int("image-steps", 4, "sampling steps per image (FLUX schnell is made for 4)")
 		stun          = flag.String("stun", "stun:stun.l.google.com:19302", "comma-separated STUN URLs")
 		turn          = flag.String("turn", "", "optional TURN URL for networks where a direct path fails, e.g. turn:turn.example.com:3478")
 		turnUser      = flag.String("turn-user", "", "TURN username")
@@ -81,6 +90,17 @@ func main() {
 		fatal("unknown -llm", fmt.Errorf("%q", *llm))
 	}
 
+	var imageBackend home.ImageBackend
+	switch *images {
+	case "":
+	case "comfyui":
+		imageBackend = &home.ComfyUI{BaseURL: *comfyURL, Checkpoint: *imageModel, Steps: *imageSteps}
+	case "mock":
+		imageBackend = home.MockImage{}
+	default:
+		fatal("unknown -images", fmt.Errorf("%q", *images))
+	}
+
 	var ice []webrtc.ICEServer
 	if *stun != "" {
 		ice = append(ice, webrtc.ICEServer{URLs: strings.Split(*stun, ",")})
@@ -96,6 +116,7 @@ func main() {
 		PublicSignalURL: *publicSignal,
 		ICEServers:      ice,
 		Backend:         backend,
+		Images:          imageBackend,
 		MaxConcurrent:   *maxConcurrent,
 		ContextTokens:   *contextTokens,
 		Approve: func(ctx context.Context, userID string) bool {
@@ -155,7 +176,7 @@ func main() {
 		}()
 	}
 
-	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel())
+	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images)
 	fmt.Println(`Type "p" + Enter to show a pairing QR.`)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		fatal("agent stopped", err)

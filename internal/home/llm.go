@@ -34,6 +34,12 @@ type Backend interface {
 	Vision() bool
 }
 
+// Unloader is implemented by LLM backends that can free their GPU memory on request, so the
+// image model can load (see gpuArbiter).
+type Unloader interface {
+	Unload(ctx context.Context) error
+}
+
 // Ollama talks to Ollama's OpenAI-compatible endpoint. Any server exposing
 // /v1/chat/completions with SSE streaming (llama.cpp's llama-server, vLLM, LM Studio) works too.
 type Ollama struct {
@@ -141,6 +147,49 @@ func (o *Ollama) Stream(ctx context.Context, model string, msgs []LLMMessage, on
 		return err
 	}
 	return ctx.Err()
+}
+
+// Unload asks Ollama to drop every model it has loaded right away (keep_alive 0), instead of
+// after OLLAMA_KEEP_ALIVE. Uses Ollama's own API: the OpenAI-compatible one has no equivalent.
+func (o *Ollama) Unload(ctx context.Context) error {
+	client := o.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	base := strings.TrimRight(o.BaseURL, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/ps", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("listing loaded models: %w", err)
+	}
+	var ps struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ps)
+	resp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("listing loaded models: %w", err)
+	}
+	for _, m := range ps.Models {
+		body, _ := json.Marshal(map[string]any{"model": m.Name, "keep_alive": 0})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/generate", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("unloading %s: %w", m.Name, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	return nil
 }
 
 // Mock echoes the last user message back word by word. It lets the whole pipeline (pairing,

@@ -35,6 +35,9 @@ type Config struct {
 	PublicSignalURL string
 	ICEServers      []webrtc.ICEServer
 	Backend         Backend
+	// Images generates images from prompts; nil turns image generation off. It shares the
+	// GPU with Backend (see gpuArbiter).
+	Images ImageBackend
 	// MaxConcurrent is how many generations run at once across all phones; others queue.
 	MaxConcurrent int
 	// ContextTokens is the model's context size. Requests drop their oldest messages to fit,
@@ -49,6 +52,10 @@ type Agent struct {
 	cfg   Config
 	id    *Identity
 	slots chan struct{}
+	// imageSlots runs one image job at a time; gpu decides whether the LLM or the image
+	// model has the GPU.
+	imageSlots chan struct{}
+	gpu        *gpuArbiter
 
 	// instance identifies this process, so a "replaced" message can tell this process's own
 	// reconnect apart from a second copy of the server running with the same identity.
@@ -73,7 +80,10 @@ func NewAgent(cfg Config, id *Identity) *Agent {
 	if cfg.MaxConcurrent < 1 {
 		cfg.MaxConcurrent = 1
 	}
-	return &Agent{cfg: cfg, id: id, instance: randomHex(8), slots: make(chan struct{}, cfg.MaxConcurrent), sessions: map[string]*session{}}
+	a := &Agent{cfg: cfg, id: id, instance: randomHex(8), slots: make(chan struct{}, cfg.MaxConcurrent),
+		imageSlots: make(chan struct{}, 1), sessions: map[string]*session{}}
+	a.gpu = newGPUArbiter(a.freeGPUFor)
+	return a
 }
 
 // Run keeps the signalling connection up until ctx is cancelled, reconnecting with backoff.
@@ -277,4 +287,19 @@ func (a *Agent) Connected() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.ws != nil
+}
+
+// freeGPUFor unloads whichever model would be in the way of mode.
+func (a *Agent) freeGPUFor(ctx context.Context, mode string) error {
+	switch mode {
+	case gpuImage:
+		if u, ok := a.cfg.Backend.(Unloader); ok {
+			return u.Unload(ctx)
+		}
+	case gpuLLM:
+		if a.cfg.Images != nil {
+			return a.cfg.Images.Free(ctx)
+		}
+	}
+	return nil
 }
