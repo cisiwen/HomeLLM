@@ -45,3 +45,47 @@ func runImagineCheck(args []string) {
 	}
 	fmt.Printf("done in %s: %d bytes -> %s\n", time.Since(start).Round(100*time.Millisecond), len(img.Data), *out)
 }
+
+// runAnimateCheck is `homellm animate [flags] -image start.jpg <motion prompt>`: makes one
+// clip through ComfyUI's Wan 2.2 image-to-video, to check and time this PC's video setup.
+func runAnimateCheck(args []string) {
+	fs := flag.NewFlagSet("animate", flag.ExitOnError)
+	comfyURL := fs.String("comfy-url", "http://127.0.0.1:8188", "base URL of the ComfyUI server")
+	imagePath := fs.String("image", "", "start image (JPEG or PNG)")
+	frames := fs.Int("frames", 81, "frames at 16 fps (4n+1; 81 = about 5 s)")
+	seed := fs.Int64("seed", 1, "seed")
+	out := fs.String("out", "homellm-animate.mp4", "where to save the clip")
+	fs.Parse(args)
+	prompt := strings.Join(fs.Args(), " ")
+	if prompt == "" || *imagePath == "" {
+		fmt.Fprintln(os.Stderr, "usage: homellm animate [flags] -image start.jpg <motion prompt>")
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(*imagePath)
+	if err != nil {
+		fatal("reading -image", err)
+	}
+	mime := "image/jpeg"
+	if strings.HasSuffix(strings.ToLower(*imagePath), ".png") {
+		mime = "image/png"
+	}
+	img := home.Image{MIME: mime, Data: data}
+	req := home.VideoRequest{Image: img, Prompt: prompt, Frames: home.NormalizeFrames(*frames), FPS: 16, Seed: *seed}
+	req.Width, req.Height = home.VideoSize(img)
+
+	c := &home.ComfyUI{BaseURL: *comfyURL}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	start := time.Now()
+	fmt.Printf("animating %dx%d, %d frames\n", req.Width, req.Height, req.Frames)
+	clip, err := c.Animate(ctx, req, func(step, total int) {
+		fmt.Printf("[%s] step %d/%d\n", time.Since(start).Round(time.Second), step, total)
+	})
+	if err != nil {
+		fatal("animating", err)
+	}
+	if err := os.WriteFile(*out, clip.Data, 0o644); err != nil {
+		fatal("saving", err)
+	}
+	fmt.Printf("done in %s: %d bytes -> %s\n", time.Since(start).Round(time.Second), len(clip.Data), *out)
+}

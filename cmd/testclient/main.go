@@ -42,13 +42,14 @@ func main() {
 		cancelAfter = flag.Duration("cancel-after", 0, "send cancel after this long (tests cancellation)")
 		imagine     = flag.String("imagine", "", "generate an image from this prompt instead of chatting")
 		enhance     = flag.Bool("enhance", false, "with -imagine: let the LLM rewrite the prompt first")
-		out         = flag.String("out", "image.jpg", "with -imagine: where to save the image")
+		out         = flag.String("out", "image.jpg", "with -imagine/-animate: where to save the result")
+		animate     = flag.String("animate", "", "with -image: animate it, with this motion prompt")
 		timeout     = flag.Duration("timeout", 2*time.Minute, "overall timeout")
 	)
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	opts := imagineOpts{prompt: *imagine, enhance: *enhance, out: *out}
+	opts := imagineOpts{prompt: *imagine, enhance: *enhance, out: *out, animate: *animate}
 	if err := run(ctx, *qrJSON, *qrFile, *user, *skipPair, *prompt, *image, *cancelAfter, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
 		os.Exit(1)
@@ -59,6 +60,7 @@ type imagineOpts struct {
 	prompt  string
 	enhance bool
 	out     string
+	animate string
 }
 
 func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt, image string, cancelAfter time.Duration, im imagineOpts) error {
@@ -263,6 +265,17 @@ func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt
 		fmt.Printf("sent image %s (%d bytes, %s)\n", id, len(data), mt)
 	}
 
+	if im.animate != "" {
+		if len(imageIDs) == 0 {
+			return errors.New("-animate needs -image")
+		}
+		id := "vid-" + randomHex(4)
+		if err := send(chat, protocol.Peer{Type: protocol.PeerAnimate, ID: id, ImageID: imageIDs[0], Prompt: im.animate}); err != nil {
+			return err
+		}
+		return waitResult(ctx, im.out, protocol.PeerVideoDone, incoming, received)
+	}
+
 	// 6. Request and streamed reply.
 	reqID := "req-" + randomHex(4)
 	if err := send(chat, protocol.Peer{Type: protocol.PeerRequest, ID: reqID, Messages: []protocol.ChatMessage{{Role: "user", Content: prompt, ImageIDs: imageIDs}}}); err != nil {
@@ -313,6 +326,12 @@ func runImagine(ctx context.Context, im imagineOpts, send func(protocol.Peer) er
 	if err := send(protocol.Peer{Type: protocol.PeerImagine, ID: id, Prompt: im.prompt, Enhance: im.enhance}); err != nil {
 		return err
 	}
+	return waitResult(ctx, im.out, protocol.PeerImageDone, incoming, received)
+}
+
+// waitResult prints progress until a generated image or clip (doneType) and its file have
+// both arrived, then saves the file.
+func waitResult(ctx context.Context, out, doneType string, incoming <-chan protocol.Peer, received <-chan []byte) error {
 	start := time.Now()
 	var done *protocol.Peer
 	var data []byte
@@ -333,16 +352,16 @@ func runImagine(ctx context.Context, im imagineOpts, send func(protocol.Peer) er
 				} else {
 					fmt.Printf("[%s] step %d/%d\n", time.Since(start).Round(100*time.Millisecond), p.Step, p.Steps)
 				}
-			case protocol.PeerImageDone:
+			case doneType:
 				done = &p
 			case protocol.PeerError, protocol.PeerFileError:
 				return fmt.Errorf("home server error: %s", p.Message)
 			}
 		}
 	}
-	if err := os.WriteFile(im.out, data, 0o644); err != nil {
+	if err := os.WriteFile(out, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("[done in %s] %dx%d seed=%d, %d bytes -> %s\n", time.Since(start).Round(time.Millisecond), done.Width, done.Height, done.Seed, len(data), im.out)
+	fmt.Printf("[done in %s] %dx%d seed=%d, %d bytes -> %s\n", time.Since(start).Round(time.Millisecond), done.Width, done.Height, done.Seed, len(data), out)
 	return nil
 }

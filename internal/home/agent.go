@@ -38,6 +38,8 @@ type Config struct {
 	// Images generates images from prompts; nil turns image generation off. It shares the
 	// GPU with Backend (see gpuArbiter).
 	Images ImageBackend
+	// Videos animates images into short clips; nil turns it off. Shares the GPU like Images.
+	Videos VideoBackend
 	// MaxConcurrent is how many generations run at once across all phones; others queue.
 	MaxConcurrent int
 	// ContextTokens is the model's context size. Requests drop their oldest messages to fit,
@@ -56,6 +58,11 @@ type Agent struct {
 	// model has the GPU.
 	imageSlots chan struct{}
 	gpu        *gpuArbiter
+
+	// held keeps finished clips whose phone had disconnected, per user, until they say hello
+	// again (see session.deliverHeld).
+	heldMu sync.Mutex
+	held   map[string][]heldClip
 
 	// instance identifies this process, so a "replaced" message can tell this process's own
 	// reconnect apart from a second copy of the server running with the same identity.
@@ -81,7 +88,7 @@ func NewAgent(cfg Config, id *Identity) *Agent {
 		cfg.MaxConcurrent = 1
 	}
 	a := &Agent{cfg: cfg, id: id, instance: randomHex(8), slots: make(chan struct{}, cfg.MaxConcurrent),
-		imageSlots: make(chan struct{}, 1), sessions: map[string]*session{}}
+		imageSlots: make(chan struct{}, 1), sessions: map[string]*session{}, held: map[string][]heldClip{}}
 	a.gpu = newGPUArbiter(a.freeGPUFor)
 	return a
 }
@@ -297,9 +304,51 @@ func (a *Agent) freeGPUFor(ctx context.Context, mode string) error {
 			return u.Unload(ctx)
 		}
 	case gpuLLM:
+		// Images and Videos are usually the same ComfyUI; freeing it twice is harmless.
+		var err error
 		if a.cfg.Images != nil {
-			return a.cfg.Images.Free(ctx)
+			err = a.cfg.Images.Free(ctx)
 		}
+		if a.cfg.Videos != nil {
+			err = errors.Join(err, a.cfg.Videos.Free(ctx))
+		}
+		return err
 	}
 	return nil
+}
+
+// A finished clip waiting for its phone to come back.
+type heldClip struct {
+	done    protocol.Peer
+	video   Video
+	expires time.Time
+}
+
+const (
+	heldClipTTL    = time.Hour
+	maxHeldPerUser = 3
+)
+
+func (a *Agent) hold(userID string, c heldClip) {
+	a.heldMu.Lock()
+	defer a.heldMu.Unlock()
+	clips := append(a.held[userID], c)
+	if len(clips) > maxHeldPerUser {
+		clips = clips[len(clips)-maxHeldPerUser:]
+	}
+	a.held[userID] = clips
+}
+
+// takeHeld returns and forgets a user's unexpired held clips.
+func (a *Agent) takeHeld(userID string) []heldClip {
+	a.heldMu.Lock()
+	defer a.heldMu.Unlock()
+	var out []heldClip
+	for _, c := range a.held[userID] {
+		if time.Now().Before(c.expires) {
+			out = append(out, c)
+		}
+	}
+	delete(a.held, userID)
+	return out
 }

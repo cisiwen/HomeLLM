@@ -134,10 +134,12 @@ type Peer struct {
 	Delta string `json:"delta,omitempty"`
 	// chat: error / files: file_error
 	Message string `json:"message,omitempty"`
-	// chat: hello reply. Images says this server can generate images (PeerImagine).
+	// chat: hello reply. Images says this server can generate images (PeerImagine), Videos
+	// that it can animate them (PeerAnimate).
 	Name   string `json:"name,omitempty"`
 	Vision bool   `json:"vision,omitempty"`
 	Images bool   `json:"images,omitempty"`
+	Videos bool   `json:"videos,omitempty"`
 
 	// chat: imagine / image_prompt / image_progress / image_done
 	Prompt  string `json:"prompt,omitempty"`
@@ -148,6 +150,10 @@ type Peer struct {
 	Step    int    `json:"step,omitempty"`
 	Steps   int    `json:"steps,omitempty"`
 	FileID  string `json:"file_id,omitempty"`
+	// chat: animate / video_done
+	ImageID string `json:"image_id,omitempty"`
+	Frames  int    `json:"frames,omitempty"`
+	FPS     int    `json:"fps,omitempty"`
 
 	// files: file_start
 	MIME   string `json:"mime,omitempty"`
@@ -182,6 +188,15 @@ const (
 	// files channel as file_id - possibly before or after this message, since the two
 	// channels are independent streams.
 	PeerImageDone = "image_done"
+
+	// chat, phone -> home: {id, image_id, prompt, frames?, seed?}. Animates an image already
+	// sent on the files channel into a short clip; prompt describes the motion. Progress comes
+	// as image_progress. Unlike other requests, a clip keeps rendering if the phone
+	// disconnects: the result is held and sent when that user next says hello.
+	PeerAnimate = "animate"
+	// chat, home -> phone: {id, file_id, width, height, frames, fps, seed}. The clip
+	// (video/mp4) arrives on the files channel as file_id, in either order.
+	PeerVideoDone = "video_done"
 
 	// files, sender: {id, mime, size, sha256}, then binary chunks, then file_end {id}. Only one
 	// file is in flight per direction at a time, so the binary chunks need no header. Phones

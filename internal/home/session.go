@@ -45,18 +45,22 @@ type session struct {
 
 	mu       sync.Mutex
 	inflight map[string]context.CancelFunc
-	closed   bool
+	// videoJobs are clip renders, which outlive the session (see runAnimate): close doesn't
+	// cancel them, only an explicit cancel does.
+	videoJobs map[string]context.CancelFunc
+	closed    bool
 }
 
 // newSession answers a phone's offer. It returns the signed answer to relay back.
 func newSession(a *Agent, id, userID string, offer protocol.Negotiation) (*session, protocol.Negotiation, error) {
 	s := &session{
-		id:       id,
-		userID:   userID,
-		agent:    a,
-		log:      slog.With("session", id[:min(8, len(id))], "user", userID),
-		images:   newImageStore(),
-		inflight: map[string]context.CancelFunc{},
+		id:        id,
+		userID:    userID,
+		agent:     a,
+		log:       slog.With("session", id[:min(8, len(id))], "user", userID),
+		images:    newImageStore(),
+		inflight:  map[string]context.CancelFunc{},
+		videoJobs: map[string]context.CancelFunc{},
 	}
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: a.cfg.ICEServers})
 	if err != nil {
@@ -174,7 +178,8 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerHello:
 		b := s.agent.cfg.Backend
 		s.send(s.chat, protocol.Peer{Type: protocol.PeerHello, Name: s.agent.id.Name, Model: b.DefaultModel(), Vision: b.Vision(),
-			Images: s.agent.cfg.Images != nil})
+			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil})
+		go s.deliverHeld()
 	case protocol.PeerRequest:
 		if ctx, ok := s.track(m.ID); ok {
 			go s.runRequest(ctx, m)
@@ -183,9 +188,16 @@ func (s *session) onChat(data []byte) {
 		if ctx, ok := s.track(m.ID); ok {
 			go s.runImagine(ctx, m)
 		}
+	case protocol.PeerAnimate:
+		if ctx, ok := s.trackVideo(m.ID); ok {
+			go s.runAnimate(ctx, m)
+		}
 	case protocol.PeerCancel:
 		s.mu.Lock()
 		cancel := s.inflight[m.ID]
+		if cancel == nil {
+			cancel = s.videoJobs[m.ID]
+		}
 		s.mu.Unlock()
 		if cancel != nil {
 			cancel()
@@ -453,3 +465,118 @@ func (s *session) sendFile(ctx context.Context, id string, img Image) error {
 
 // maxBufferedFileBytes is how much of an outgoing file may wait in the data channel's buffer.
 const maxBufferedFileBytes = 1 << 20
+
+// videoJobTimeout bounds one clip render, which otherwise runs on after its phone leaves.
+const videoJobTimeout = 30 * time.Minute
+
+// trackVideo registers a clip render. Its context isn't tied to the session: a render takes
+// minutes, long enough for a phone to lock its screen or lose signal.
+func (s *session) trackVideo(id string) (context.Context, bool) {
+	if id == "" {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), videoJobTimeout)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dup := s.videoJobs[id]; s.closed || dup {
+		cancel()
+		return nil, false
+	}
+	s.videoJobs[id] = cancel
+	return ctx, true
+}
+
+func (s *session) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
+	defer func() {
+		s.mu.Lock()
+		if c := s.videoJobs[m.ID]; c != nil {
+			c()
+			delete(s.videoJobs, m.ID)
+		}
+		s.mu.Unlock()
+	}()
+	fail := func(err error) { s.failRequest(m.ID, err) }
+	videos := s.agent.cfg.Videos
+	if videos == nil {
+		fail(errors.New("this home server can't make videos"))
+		return
+	}
+	prompt := []rune(strings.TrimSpace(m.Prompt))
+	if len(prompt) == 0 {
+		fail(errors.New("describe the motion you want"))
+		return
+	}
+	img, err := s.images.Wait(ctx, m.ImageID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	req := VideoRequest{
+		Image: img, Prompt: string(prompt[:min(len(prompt), maxPromptRunes)]),
+		Frames: NormalizeFrames(m.Frames), FPS: videoFPS, Seed: m.Seed,
+	}
+	req.Width, req.Height = VideoSize(img)
+	if req.Seed <= 0 {
+		req.Seed = randomSeed()
+	}
+
+	select {
+	case s.agent.imageSlots <- struct{}{}:
+		defer func() { <-s.agent.imageSlots }()
+	case <-ctx.Done():
+		fail(ctx.Err())
+		return
+	}
+	release, err := s.agent.gpu.acquire(ctx, gpuImage)
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: m.ID, Step: 0})
+	s.log.Info("animating", "id", m.ID, "size", fmt.Sprintf("%dx%d", req.Width, req.Height), "frames", req.Frames, "seed", req.Seed)
+	start := time.Now()
+	clip, err := videos.Animate(ctx, req, func(step, steps int) {
+		s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: m.ID, Step: step, Steps: steps})
+	})
+	release()
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.log.Info("clip done", "id", m.ID, "took", time.Since(start).Round(time.Second), "bytes", len(clip.Data))
+
+	done := protocol.Peer{
+		Type: protocol.PeerVideoDone, ID: m.ID, FileID: m.ID + "-video",
+		Width: req.Width, Height: req.Height, Frames: req.Frames, FPS: req.FPS, Seed: req.Seed,
+	}
+	if s.isClosed() || s.deliverClip(context.Background(), done, clip) != nil {
+		s.log.Info("phone has gone; holding the clip for its next visit", "id", m.ID)
+		s.agent.hold(s.userID, heldClip{done: done, video: clip, expires: time.Now().Add(heldClipTTL)})
+	}
+}
+
+// deliverClip sends a finished clip and its video_done.
+func (s *session) deliverClip(ctx context.Context, done protocol.Peer, clip Video) error {
+	if err := s.sendFile(ctx, done.FileID, Image{MIME: clip.MIME, Data: clip.Data}); err != nil {
+		return err
+	}
+	s.send(s.chat, done)
+	return nil
+}
+
+// deliverHeld sends clips that finished while this user's phone was away.
+func (s *session) deliverHeld() {
+	for _, c := range s.agent.takeHeld(s.userID) {
+		s.log.Info("delivering a clip that finished while the phone was away", "id", c.done.ID)
+		if err := s.deliverClip(context.Background(), c.done, c.video); err != nil {
+			s.agent.hold(s.userID, c)
+			return
+		}
+	}
+}

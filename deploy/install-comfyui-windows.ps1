@@ -12,7 +12,9 @@ on 127.0.0.1 - HomeLLM is its only client; nothing on the network can reach it.
 #>
 param(
     [Parameter(Mandatory)][string]$ComfyDir,
-    [int]$Port = 8188
+    [int]$Port = 8188,
+    # Extra ComfyUI flags, e.g. the memory options Wan 2.2 needs on some machines (see README).
+    [string]$ExtraArgs = ""
 )
 $ErrorActionPreference = "Stop"
 $taskName = "HomeLLM-ComfyUI"
@@ -34,7 +36,7 @@ $log = Join-Path $ComfyDir "comfyui.log"
 @echo off
 cd /d "$ComfyDir"
 :loop
-"$python" -s "$main" --listen 127.0.0.1 --port $Port --disable-auto-launch >> "$log" 2>&1
+"$python" -s "$main" --listen 127.0.0.1 --port $Port --disable-auto-launch $ExtraArgs >> "$log" 2>&1
 ping -n 6 127.0.0.1 >nul
 goto loop
 "@ | Set-Content -Encoding ASCII (Join-Path $ComfyDir "run-homellm.cmd")

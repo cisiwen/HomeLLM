@@ -15,7 +15,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -74,7 +73,9 @@ type ComfyUI struct {
 	BaseURL    string // e.g. http://127.0.0.1:8188
 	Checkpoint string // an all-in-one checkpoint in ComfyUI's models/checkpoints
 	Steps      int    // FLUX schnell is distilled for 4
-	Client     *http.Client
+	// Video is the image-to-video model's files; zero means DefaultWanVideo.
+	Video  WanVideo
+	Client *http.Client
 }
 
 func (c *ComfyUI) client() *http.Client {
@@ -113,27 +114,41 @@ func (c *ComfyUI) workflow(req ImageRequest) map[string]any {
 }
 
 func (c *ComfyUI) Generate(ctx context.Context, req ImageRequest, onProgress func(step, steps int)) (Image, error) {
+	data, err := c.run(ctx, c.workflow(req), func(_ string, value, max int) {
+		if onProgress != nil {
+			onProgress(value, max)
+		}
+	}, MaxFileSize)
+	if err != nil {
+		return Image{}, err
+	}
+	return toJPEG(data)
+}
+
+// run queues a workflow, follows its progress (reported per node) and returns the bytes of
+// its "out" node's first output file.
+func (c *ComfyUI) run(ctx context.Context, workflow map[string]any, onProgress func(node string, value, max int), maxBytes int64) ([]byte, error) {
 	clientID := randomHex(8)
 
 	// Listen before queueing, so no progress or completion event can be missed.
 	wsURL := strings.Replace(c.url("/ws?clientId="+clientID), "http", "ws", 1)
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.client()})
 	if err != nil {
-		return Image{}, fmt.Errorf("image generator not reachable (is ComfyUI running?): %w", err)
+		return nil, fmt.Errorf("image generator not reachable (is ComfyUI running?): %w", err)
 	}
 	defer ws.CloseNow()
 	ws.SetReadLimit(64 << 20) // ComfyUI also sends binary preview frames
 
-	body, _ := json.Marshal(map[string]any{"prompt": c.workflow(req), "client_id": clientID})
+	body, _ := json.Marshal(map[string]any{"prompt": workflow, "client_id": clientID})
 	var queued struct {
 		PromptID string          `json:"prompt_id"`
 		Error    json.RawMessage `json:"error"`
 	}
 	if err := c.postJSON(ctx, "/prompt", body, &queued); err != nil {
-		return Image{}, err
+		return nil, err
 	}
 	if queued.PromptID == "" {
-		return Image{}, fmt.Errorf("image generator rejected the job: %s", string(queued.Error))
+		return nil, fmt.Errorf("image generator rejected the job: %s", string(queued.Error))
 	}
 
 	done := make(chan error, 1)
@@ -147,13 +162,13 @@ func (c *ComfyUI) Generate(ctx context.Context, req ImageRequest, onProgress fun
 		if ctx.Err() != nil {
 			c.cancel(queued.PromptID)
 		}
-		return Image{}, err
+		return nil, err
 	}
-	return c.fetchResult(ctx, queued.PromptID)
+	return c.fetchOutput(ctx, queued.PromptID, maxBytes)
 }
 
 // follow reads ComfyUI's event stream until this prompt finishes.
-func (c *ComfyUI) follow(ctx context.Context, ws *websocket.Conn, promptID string, onProgress func(step, steps int)) error {
+func (c *ComfyUI) follow(ctx context.Context, ws *websocket.Conn, promptID string, onProgress func(node string, value, max int)) error {
 	for {
 		typ, data, err := ws.Read(ctx)
 		if err != nil {
@@ -167,6 +182,7 @@ func (c *ComfyUI) follow(ctx context.Context, ws *websocket.Conn, promptID strin
 			Data struct {
 				PromptID         string  `json:"prompt_id"`
 				Node             *string `json:"node"`
+				ProgressNode     string  `json:"node_id"`
 				Value            int     `json:"value"`
 				Max              int     `json:"max"`
 				ExceptionMessage string  `json:"exception_message"`
@@ -178,7 +194,11 @@ func (c *ComfyUI) follow(ctx context.Context, ws *websocket.Conn, promptID strin
 		switch ev.Type {
 		case "progress":
 			if onProgress != nil {
-				onProgress(ev.Data.Value, ev.Data.Max)
+				node := ev.Data.ProgressNode
+				if node == "" && ev.Data.Node != nil {
+					node = *ev.Data.Node
+				}
+				onProgress(node, ev.Data.Value, ev.Data.Max)
 			}
 		case "execution_error":
 			return fmt.Errorf("image generation failed: %s", strings.TrimSpace(ev.Data.ExceptionMessage))
@@ -202,57 +222,6 @@ type comfyFile struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder"`
 	Type      string `json:"type"`
-}
-
-// resultFile finds the job's output image in ComfyUI's history, waiting for it to appear.
-func (c *ComfyUI) resultFile(ctx context.Context, promptID string) (comfyFile, error) {
-	deadline := time.Now().Add(historyWait)
-	for {
-		var history map[string]struct {
-			Outputs map[string]struct {
-				Images []comfyFile `json:"images"`
-			} `json:"outputs"`
-		}
-		if err := c.getJSON(ctx, "/history/"+url.PathEscape(promptID), &history); err != nil {
-			return comfyFile{}, err
-		}
-		if out := history[promptID].Outputs["out"]; len(out.Images) > 0 {
-			return out.Images[0], nil
-		}
-		if time.Now().After(deadline) {
-			return comfyFile{}, errors.New("the image generator finished without an image")
-		}
-		select {
-		case <-ctx.Done():
-			return comfyFile{}, ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
-func (c *ComfyUI) fetchResult(ctx context.Context, promptID string) (Image, error) {
-	f, err := c.resultFile(ctx, promptID)
-	if err != nil {
-		return Image{}, err
-	}
-	q := url.Values{"filename": {f.Filename}, "subfolder": {f.Subfolder}, "type": {f.Type}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/view?"+q.Encode()), nil)
-	if err != nil {
-		return Image{}, err
-	}
-	resp, err := c.client().Do(req)
-	if err != nil {
-		return Image{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return Image{}, fmt.Errorf("fetching the image: %s", resp.Status)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxFileSize))
-	if err != nil {
-		return Image{}, err
-	}
-	return toJPEG(data)
 }
 
 // cancel drops a queued job, or stops it if it's the one running. Best effort, and on a
