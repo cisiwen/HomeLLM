@@ -667,7 +667,8 @@ func (s *session) runAddSound(ctx context.Context, m protocol.Peer) {
 		return
 	}
 	prompt := strings.TrimSpace(m.Prompt)
-	if m.Enhance && prompt != "" {
+	// The sound model's text encoder only reads English: have the LLM rewrite anything else.
+	if prompt != "" && (m.Enhance || !isASCII(prompt)) {
 		prompt = s.describeSound(ctx, prompt)
 	}
 	select {
@@ -690,4 +691,13 @@ func (s *session) runAddSound(ctx context.Context, m protocol.Peer) {
 	if s.isClosed() || s.deliverClip(context.Background(), done, voiced) != nil {
 		s.agent.hold(s.userID, heldClip{done: done, video: voiced, expires: time.Now().Add(heldClipTTL)})
 	}
+}
+
+func isASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
 }

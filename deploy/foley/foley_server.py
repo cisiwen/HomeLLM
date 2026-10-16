@@ -64,7 +64,8 @@ def _generate(req):
     video, out, prompt = req["video"], req["out"], req.get("prompt", "")
     if not os.path.isfile(video):
         raise ValueError(f"no such video: {video}")
-    seed = int(req.get("seed") or 1)
+    # NumPy only takes 32-bit seeds; HomeLLM's are wider.
+    seed = int(req.get("seed") or 1) % 2**32
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

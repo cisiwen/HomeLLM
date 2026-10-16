@@ -77,7 +77,8 @@ func (f *Foley) AddSound(ctx context.Context, clip Video, prompt string, seed in
 		return Video{}, err
 	}
 	err = f.post(ctx, "/generate", map[string]any{
-		"video": in, "out": out, "prompt": prompt, "seed": seed,
+		// The service seeds NumPy, which only takes 32-bit seeds.
+		"video": in, "out": out, "prompt": prompt, "seed": seed & 0xffffffff,
 		// Hunyuan's own default negative prompt, as in its gradio app.
 		"neg_prompt": "noisy, harsh",
 	}, nil)
