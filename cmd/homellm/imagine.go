@@ -89,3 +89,49 @@ func runAnimateCheck(args []string) {
 	}
 	fmt.Printf("done in %s: %d bytes -> %s\n", time.Since(start).Round(time.Second), len(clip.Data), *out)
 }
+
+// runMusicCheck is `homellm music [flags] -clip in.mp4 <style tags>`: composes a background
+// track with ComfyUI's ACE-Step 1.5 and mixes it under the clip, to check and time a PC.
+func runMusicCheck(args []string) {
+	fs := flag.NewFlagSet("music", flag.ExitOnError)
+	comfyURL := fs.String("comfy-url", "http://127.0.0.1:8188", "base URL of the ComfyUI server")
+	clipPath := fs.String("clip", "", "the clip (MP4) to put music under")
+	ffmpeg := fs.String("ffmpeg", "ffmpeg", "ffmpeg (ffprobe must be next to it)")
+	bpm := fs.Int("bpm", 90, "tempo")
+	key := fs.String("key", "C major", "key")
+	seed := fs.Int64("seed", 1, "seed")
+	out := fs.String("out", "homellm-music.mp4", "where to save the clip with music")
+	fs.Parse(args)
+	tags := strings.Join(fs.Args(), " ")
+	if tags == "" || *clipPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: homellm music [flags] -clip in.mp4 <style tags>")
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(*clipPath)
+	if err != nil {
+		fatal("reading -clip", err)
+	}
+	clip := home.Video{MIME: "video/mp4", Data: data}
+	mixer := home.Mixer{FFmpeg: *ffmpeg}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	seconds, err := mixer.Duration(ctx, clip)
+	if err != nil {
+		fatal("probing -clip", err)
+	}
+	start := time.Now()
+	c := &home.ComfyUI{BaseURL: *comfyURL}
+	track, err := c.Compose(ctx, home.MusicRequest{Tags: tags, BPM: *bpm, Key: *key, Seconds: seconds + 2, Seed: *seed})
+	if err != nil {
+		fatal("composing", err)
+	}
+	fmt.Printf("composed %.1fs of music in %s\n", seconds+2, time.Since(start).Round(100*time.Millisecond))
+	mixed, err := mixer.Mix(ctx, clip, track)
+	if err != nil {
+		fatal("mixing", err)
+	}
+	if err := os.WriteFile(*out, mixed.Data, 0o644); err != nil {
+		fatal("saving", err)
+	}
+	fmt.Printf("done in %s: %d bytes -> %s\n", time.Since(start).Round(100*time.Millisecond), len(mixed.Data), *out)
+}

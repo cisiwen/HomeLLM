@@ -74,8 +74,10 @@ type ComfyUI struct {
 	Checkpoint string // an all-in-one checkpoint in ComfyUI's models/checkpoints
 	Steps      int    // FLUX schnell is distilled for 4
 	// Video is the image-to-video model's files; zero means DefaultWanVideo.
-	Video  WanVideo
-	Client *http.Client
+	Video WanVideo
+	// MusicCheckpoint is the ACE-Step 1.5 checkpoint; empty means DefaultMusicCheckpoint.
+	MusicCheckpoint string
+	Client          *http.Client
 }
 
 func (c *ComfyUI) client() *http.Client {

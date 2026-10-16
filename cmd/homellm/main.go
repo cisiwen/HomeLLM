@@ -5,8 +5,8 @@
 // Console commands while running: "p" + Enter prints a new pairing QR; pairing requests are
 // approved by answering "y". When it runs as a background service with no console,
 // `homellm pair` in any terminal on the same PC does the same (see pairdesk.go).
-// `homellm imagine <prompt>` and `homellm animate -image x.jpg <prompt>` check this PC's
-// image and video generation setup (see imagine.go).
+// `homellm imagine <prompt>`, `homellm animate -image x.jpg <prompt>` and `homellm music -clip
+// x.mp4 <tags>` check this PC's image, video and music setup (see imagine.go).
 package main
 
 import (
@@ -43,6 +43,10 @@ func main() {
 		runAnimateCheck(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "music" {
+		runMusicCheck(os.Args[2:])
+		return
+	}
 	homeDir, _ := os.UserHomeDir()
 	var (
 		signalURL     = flag.String("signal", "ws://localhost:8090/ws", "signalling WebSocket URL this server connects to")
@@ -60,6 +64,8 @@ func main() {
 		videos        = flag.String("videos", "", "image-to-video backend: comfyui (Wan 2.2) or mock (empty = off)")
 		sound         = flag.String("sound", "", "add-sound backend: foley (HunyuanVideo-Foley service) or mock (empty = off)")
 		foleyURL      = flag.String("foley-url", "http://127.0.0.1:8190", "base URL of the Foley service (deploy/foley)")
+		music         = flag.String("music", "", "background-music backend: comfyui (ACE-Step 1.5) or mock (empty = off); needs -ffmpeg")
+		ffmpegPath    = flag.String("ffmpeg", "ffmpeg", "ffmpeg, for mixing music under clips (ffprobe must be next to it)")
 		stun          = flag.String("stun", "stun:stun.l.google.com:19302", "comma-separated STUN URLs")
 		turn          = flag.String("turn", "", "optional TURN URL for networks where a direct path fails, e.g. turn:turn.example.com:3478")
 		turnUser      = flag.String("turn-user", "", "TURN username")
@@ -131,6 +137,21 @@ func main() {
 		fatal("unknown -sound", fmt.Errorf("%q", *sound))
 	}
 
+	var musicBackend home.MusicBackend
+	switch *music {
+	case "":
+	case "comfyui":
+		musicBackend = &home.ComfyUI{BaseURL: *comfyURL}
+	case "mock":
+		musicBackend = home.MockMusic{}
+	default:
+		fatal("unknown -music", fmt.Errorf("%q", *music))
+	}
+	var mixer *home.Mixer
+	if musicBackend != nil {
+		mixer = &home.Mixer{FFmpeg: *ffmpegPath}
+	}
+
 	var ice []webrtc.ICEServer
 	if *stun != "" {
 		ice = append(ice, webrtc.ICEServer{URLs: strings.Split(*stun, ",")})
@@ -149,6 +170,8 @@ func main() {
 		Images:          imageBackend,
 		Videos:          videoBackend,
 		Sound:           soundBackend,
+		Music:           musicBackend,
+		Mixer:           mixer,
 		MaxConcurrent:   *maxConcurrent,
 		ContextTokens:   *contextTokens,
 		Approve: func(ctx context.Context, userID string) bool {
@@ -208,7 +231,7 @@ func main() {
 		}()
 	}
 
-	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "sound", *sound)
+	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "sound", *sound, "music", *music)
 	fmt.Println(`Type "p" + Enter to show a pairing QR.`)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		fatal("agent stopped", err)

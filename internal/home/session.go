@@ -178,7 +178,8 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerHello:
 		b := s.agent.cfg.Backend
 		s.send(s.chat, protocol.Peer{Type: protocol.PeerHello, Name: s.agent.id.Name, Model: b.DefaultModel(), Vision: b.Vision(),
-			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil, Sound: s.agent.cfg.Sound != nil})
+			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil, Sound: s.agent.cfg.Sound != nil,
+			Music: s.agent.canMakeMusic()})
 		go s.deliverHeld()
 	case protocol.PeerRequest:
 		if ctx, ok := s.track(m.ID); ok {
@@ -195,6 +196,10 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerAddSound:
 		if ctx, ok := s.trackVideo(m.ID); ok {
 			go s.runAddSound(ctx, m)
+		}
+	case protocol.PeerAddMusic:
+		if ctx, ok := s.trackVideo(m.ID); ok {
+			go s.runAddMusic(ctx, m)
 		}
 	case protocol.PeerCancel:
 		s.mu.Lock()
@@ -535,6 +540,7 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 		req.Seed = randomSeed()
 	}
 	withSound := m.Sound && s.agent.cfg.Sound != nil
+	withMusic := m.Music && s.agent.canMakeMusic()
 
 	select {
 	case s.agent.imageSlots <- struct{}{}:
@@ -548,6 +554,10 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 	soundPrompt := ""
 	if withSound {
 		soundPrompt = s.describeSound(ctx, req.Prompt)
+	}
+	var music MusicRequest
+	if withMusic {
+		music = s.musicBrief(ctx, req.Prompt, float64(req.Frames)/float64(req.FPS), req.Seed)
 	}
 
 	release, err := s.agent.gpu.acquire(ctx, gpuImage)
@@ -572,6 +582,21 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 		Type: protocol.PeerVideoDone, ID: m.ID, FileID: m.ID + "-video",
 		Width: req.Width, Height: req.Height, Frames: req.Frames, FPS: req.FPS, Seed: req.Seed,
 	}
+	// Music before sound: ACE-Step runs in ComfyUI, which still has the GPU after Wan.
+	var track Audio
+	var notes []string
+	if withMusic {
+		var err error
+		if track, err = s.composeMusic(ctx, m.ID, music); err != nil {
+			if ctx.Err() != nil {
+				fail(ctx.Err())
+				return
+			}
+			s.log.Warn("composing music failed", "id", m.ID, "err", err)
+			notes = append(notes, "couldn't add music: "+err.Error())
+			withMusic = false
+		}
+	}
 	if withSound {
 		// A failed soundtrack shouldn't cost the clip: send it silent, saying why.
 		if voiced, err := s.addSound(ctx, m.ID, clip, soundPrompt, req.Seed); err != nil {
@@ -579,13 +604,23 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 				fail(ctx.Err())
 				return
 			}
-			s.log.Warn("adding sound failed; sending the clip silent", "id", m.ID, "err", err)
-			done.Message = "couldn't add sound: " + err.Error()
+			s.log.Warn("adding sound failed; sending the clip without it", "id", m.ID, "err", err)
+			notes = append(notes, "couldn't add sound: "+err.Error())
 		} else {
 			clip = voiced
 			done.Prompt = soundPrompt
 		}
 	}
+	if withMusic {
+		if mixed, err := s.agent.cfg.Mixer.Mix(ctx, clip, track); err != nil {
+			s.log.Warn("mixing music failed", "id", m.ID, "err", err)
+			notes = append(notes, "couldn't add music: "+err.Error())
+		} else {
+			clip = mixed
+			done.Prompt = strings.TrimPrefix(done.Prompt+" · music: "+music.Tags, " · ")
+		}
+	}
+	done.Message = strings.Join(notes, "; ")
 	if s.isClosed() || s.deliverClip(context.Background(), done, clip) != nil {
 		s.log.Info("phone has gone; holding the clip for its next visit", "id", m.ID)
 		s.agent.hold(s.userID, heldClip{done: done, video: clip, expires: time.Now().Add(heldClipTTL)})
@@ -700,4 +735,97 @@ func isASCII(s string) bool {
 		}
 	}
 	return true
+}
+
+// musicBrief has the LLM pick a style, tempo and key for a clip, for a track a little longer
+// than the clip itself (the mixer trims and fades it).
+func (s *session) musicBrief(ctx context.Context, clipDescription string, clipSeconds float64, seed int64) MusicRequest {
+	reply, err := s.rewrite(ctx, musicInstructions, clipDescription)
+	if err != nil && ctx.Err() == nil {
+		s.log.Warn("music brief failed; using a default style", "err", err)
+	}
+	tags, bpm, key := parseMusicBrief(reply)
+	if clipSeconds <= 0 {
+		clipSeconds = 5
+	}
+	return MusicRequest{Tags: tags, BPM: bpm, Key: key, Seconds: clipSeconds + 2, Seed: seed}
+}
+
+// composeMusic runs the music model (in ComfyUI), reporting the stage to the phone.
+func (s *session) composeMusic(ctx context.Context, id string, req MusicRequest) (Audio, error) {
+	release, err := s.agent.gpu.acquire(ctx, gpuImage)
+	if err != nil {
+		return Audio{}, err
+	}
+	defer release()
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: id, Stage: "music"})
+	s.log.Info("composing music", "id", id, "tags", req.Tags, "bpm", req.BPM, "key", req.Key)
+	start := time.Now()
+	track, err := s.agent.cfg.Music.Compose(ctx, req)
+	if err == nil {
+		s.log.Info("music composed", "id", id, "took", time.Since(start).Round(time.Second), "bytes", len(track.Data))
+	}
+	return track, err
+}
+
+// runAddMusic lays background music under an existing clip (sent back by the phone).
+func (s *session) runAddMusic(ctx context.Context, m protocol.Peer) {
+	defer func() {
+		s.mu.Lock()
+		if c := s.videoJobs[m.ID]; c != nil {
+			c()
+			delete(s.videoJobs, m.ID)
+		}
+		s.mu.Unlock()
+	}()
+	fail := func(err error) { s.failRequest(m.ID, err) }
+	if !s.agent.canMakeMusic() {
+		fail(errors.New("this home server can't add music"))
+		return
+	}
+	file, err := s.images.Wait(ctx, m.ImageID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if file.MIME != "video/mp4" {
+		fail(errors.New("send the clip as an MP4"))
+		return
+	}
+	clip := Video{MIME: file.MIME, Data: file.Data}
+	seconds, err := s.agent.cfg.Mixer.Duration(ctx, clip)
+	if err != nil {
+		fail(err)
+		return
+	}
+	seed := m.Seed
+	if seed <= 0 {
+		seed = randomSeed()
+	}
+	description := strings.TrimSpace(m.Prompt)
+	if description == "" {
+		description = "a short video clip"
+	}
+	brief := s.musicBrief(ctx, description, seconds, seed)
+	select {
+	case s.agent.imageSlots <- struct{}{}:
+		defer func() { <-s.agent.imageSlots }()
+	case <-ctx.Done():
+		fail(ctx.Err())
+		return
+	}
+	track, err := s.composeMusic(ctx, m.ID, brief)
+	if err != nil {
+		fail(err)
+		return
+	}
+	mixed, err := s.agent.cfg.Mixer.Mix(ctx, clip, track)
+	if err != nil {
+		fail(err)
+		return
+	}
+	done := protocol.Peer{Type: protocol.PeerVideoDone, ID: m.ID, FileID: m.ID + "-video", Prompt: "music: " + brief.Tags, Seed: seed}
+	if s.isClosed() || s.deliverClip(context.Background(), done, mixed) != nil {
+		s.agent.hold(s.userID, heldClip{done: done, video: mixed, expires: time.Now().Add(heldClipTTL)})
+	}
 }

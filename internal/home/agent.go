@@ -42,6 +42,10 @@ type Config struct {
 	Videos VideoBackend
 	// Sound adds soundtracks to clips; nil turns it off. Shares the GPU too.
 	Sound SoundBackend
+	// Music composes background tracks (in ComfyUI, so the image GPU mode) and Mixer lays them
+	// under clips; music is off unless both are set.
+	Music MusicBackend
+	Mixer *Mixer
 	// MaxConcurrent is how many generations run at once across all phones; others queue.
 	MaxConcurrent int
 	// ContextTokens is the model's context size. Requests drop their oldest messages to fit,
@@ -314,6 +318,9 @@ func (a *Agent) freeGPUFor(ctx context.Context, mode string) error {
 		if a.cfg.Videos != nil {
 			errs = append(errs, a.cfg.Videos.Free(ctx))
 		}
+		if a.cfg.Music != nil {
+			errs = append(errs, a.cfg.Music.Free(ctx))
+		}
 	}
 	if mode != gpuSound && a.cfg.Sound != nil {
 		errs = append(errs, a.cfg.Sound.Free(ctx))
@@ -356,3 +363,6 @@ func (a *Agent) takeHeld(userID string) []heldClip {
 	delete(a.held, userID)
 	return out
 }
+
+// canMakeMusic says whether music is on: a composer and a mixer.
+func (a *Agent) canMakeMusic() bool { return a.cfg.Music != nil && a.cfg.Mixer != nil }
