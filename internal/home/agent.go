@@ -40,6 +40,8 @@ type Config struct {
 	Images ImageBackend
 	// Videos animates images into short clips; nil turns it off. Shares the GPU like Images.
 	Videos VideoBackend
+	// Sound adds soundtracks to clips; nil turns it off. Shares the GPU too.
+	Sound SoundBackend
 	// MaxConcurrent is how many generations run at once across all phones; others queue.
 	MaxConcurrent int
 	// ContextTokens is the model's context size. Requests drop their oldest messages to fit,
@@ -296,25 +298,27 @@ func (a *Agent) Connected() bool {
 	return a.ws != nil
 }
 
-// freeGPUFor unloads whichever model would be in the way of mode.
+// freeGPUFor unloads every model that would be in the way of mode: everything that isn't
+// that mode's own. Images and Videos are usually the same ComfyUI; freeing it twice is harmless.
 func (a *Agent) freeGPUFor(ctx context.Context, mode string) error {
-	switch mode {
-	case gpuImage:
+	var errs []error
+	if mode != gpuLLM {
 		if u, ok := a.cfg.Backend.(Unloader); ok {
-			return u.Unload(ctx)
+			errs = append(errs, u.Unload(ctx))
 		}
-	case gpuLLM:
-		// Images and Videos are usually the same ComfyUI; freeing it twice is harmless.
-		var err error
+	}
+	if mode != gpuImage {
 		if a.cfg.Images != nil {
-			err = a.cfg.Images.Free(ctx)
+			errs = append(errs, a.cfg.Images.Free(ctx))
 		}
 		if a.cfg.Videos != nil {
-			err = errors.Join(err, a.cfg.Videos.Free(ctx))
+			errs = append(errs, a.cfg.Videos.Free(ctx))
 		}
-		return err
 	}
-	return nil
+	if mode != gpuSound && a.cfg.Sound != nil {
+		errs = append(errs, a.cfg.Sound.Free(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 // A finished clip waiting for its phone to come back.

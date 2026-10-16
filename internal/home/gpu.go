@@ -9,7 +9,8 @@ import (
 // GPU modes: which kind of model currently owns the GPU.
 const (
 	gpuLLM   = "llm"
-	gpuImage = "image"
+	gpuImage = "image" // ComfyUI: images and clips
+	gpuSound = "sound" // the Foley service
 )
 
 // gpuArbiter shares one GPU between the LLM and the image model, which don't fit in its

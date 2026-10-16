@@ -140,6 +140,7 @@ type Peer struct {
 	Vision bool   `json:"vision,omitempty"`
 	Images bool   `json:"images,omitempty"`
 	Videos bool   `json:"videos,omitempty"`
+	Sound  bool   `json:"sound,omitempty"` // hello: can add sound; animate: add sound too
 
 	// chat: imagine / image_prompt / image_progress / image_done
 	Prompt  string `json:"prompt,omitempty"`
@@ -154,6 +155,8 @@ type Peer struct {
 	ImageID string `json:"image_id,omitempty"`
 	Frames  int    `json:"frames,omitempty"`
 	FPS     int    `json:"fps,omitempty"`
+	// image_progress: which stage is running - "" (image/clip sampling) or "sound".
+	Stage string `json:"stage,omitempty"`
 
 	// files: file_start
 	MIME   string `json:"mime,omitempty"`
@@ -197,6 +200,13 @@ const (
 	// chat, home -> phone: {id, file_id, width, height, frames, fps, seed}. The clip
 	// (video/mp4) arrives on the files channel as file_id, in either order.
 	PeerVideoDone = "video_done"
+	// chat, phone -> home: {id, image_id, prompt, enhance?}. Adds a matching soundtrack to a
+	// clip already sent on the files channel (as image_id). prompt describes the clip or its
+	// sound; enhance has the LLM turn a clip description into a sound description first.
+	// The result comes back like a clip: video_done (+ the file). animate {sound: true} does
+	// the same as part of making the clip. On video_done, message is set when a requested
+	// soundtrack couldn't be added and the clip came back silent.
+	PeerAddSound = "add_sound"
 
 	// files, sender: {id, mime, size, sha256}, then binary chunks, then file_end {id}. Only one
 	// file is in flight per direction at a time, so the binary chunks need no header. Phones

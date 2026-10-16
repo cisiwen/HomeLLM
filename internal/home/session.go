@@ -178,7 +178,7 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerHello:
 		b := s.agent.cfg.Backend
 		s.send(s.chat, protocol.Peer{Type: protocol.PeerHello, Name: s.agent.id.Name, Model: b.DefaultModel(), Vision: b.Vision(),
-			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil})
+			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil, Sound: s.agent.cfg.Sound != nil})
 		go s.deliverHeld()
 	case protocol.PeerRequest:
 		if ctx, ok := s.track(m.ID); ok {
@@ -191,6 +191,10 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerAnimate:
 		if ctx, ok := s.trackVideo(m.ID); ok {
 			go s.runAnimate(ctx, m)
+		}
+	case protocol.PeerAddSound:
+		if ctx, ok := s.trackVideo(m.ID); ok {
+			go s.runAddSound(ctx, m)
 		}
 	case protocol.PeerCancel:
 		s.mu.Lock()
@@ -402,6 +406,11 @@ func (s *session) runImagine(ctx context.Context, m protocol.Peer) {
 
 // enhancePrompt asks the LLM for a detailed version of a short image idea.
 func (s *session) enhancePrompt(ctx context.Context, idea string) (string, error) {
+	return s.rewrite(ctx, enhanceInstructions, idea)
+}
+
+// rewrite runs one short instruction-following request on the LLM (prompt rewriting).
+func (s *session) rewrite(ctx context.Context, instructions, text string) (string, error) {
 	select {
 	case s.agent.slots <- struct{}{}:
 		defer func() { <-s.agent.slots }()
@@ -415,8 +424,8 @@ func (s *session) enhancePrompt(ctx context.Context, idea string) (string, error
 	defer release()
 	var out strings.Builder
 	err = s.agent.cfg.Backend.Stream(ctx, "", []LLMMessage{
-		{Role: "system", Content: enhanceInstructions},
-		{Role: "user", Content: idea},
+		{Role: "system", Content: instructions},
+		{Role: "user", Content: text},
 	}, func(delta string) error {
 		out.WriteString(delta)
 		return nil
@@ -424,8 +433,8 @@ func (s *session) enhancePrompt(ctx context.Context, idea string) (string, error
 	if err != nil {
 		return "", err
 	}
-	text := strings.Trim(strings.TrimSpace(out.String()), "\"'“”")
-	return string([]rune(text)[:min(len([]rune(text)), maxPromptRunes)]), nil
+	result := []rune(strings.Trim(strings.TrimSpace(out.String()), "\"'“”"))
+	return string(result[:min(len(result), maxPromptRunes)]), nil
 }
 
 // sendFile sends an image to the phone on the files channel: file_start, binary chunks,
@@ -525,6 +534,7 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 	if req.Seed <= 0 {
 		req.Seed = randomSeed()
 	}
+	withSound := m.Sound && s.agent.cfg.Sound != nil
 
 	select {
 	case s.agent.imageSlots <- struct{}{}:
@@ -533,6 +543,13 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 		fail(ctx.Err())
 		return
 	}
+	// The sound description comes from the motion prompt alone, so work it out before the clip:
+	// the LLM then loads once, before Wan, instead of between Wan and Foley.
+	soundPrompt := ""
+	if withSound {
+		soundPrompt = s.describeSound(ctx, req.Prompt)
+	}
+
 	release, err := s.agent.gpu.acquire(ctx, gpuImage)
 	if err != nil {
 		fail(err)
@@ -554,6 +571,20 @@ func (s *session) runAnimate(ctx context.Context, m protocol.Peer) {
 	done := protocol.Peer{
 		Type: protocol.PeerVideoDone, ID: m.ID, FileID: m.ID + "-video",
 		Width: req.Width, Height: req.Height, Frames: req.Frames, FPS: req.FPS, Seed: req.Seed,
+	}
+	if withSound {
+		// A failed soundtrack shouldn't cost the clip: send it silent, saying why.
+		if voiced, err := s.addSound(ctx, m.ID, clip, soundPrompt, req.Seed); err != nil {
+			if ctx.Err() != nil {
+				fail(ctx.Err())
+				return
+			}
+			s.log.Warn("adding sound failed; sending the clip silent", "id", m.ID, "err", err)
+			done.Message = "couldn't add sound: " + err.Error()
+		} else {
+			clip = voiced
+			done.Prompt = soundPrompt
+		}
 	}
 	if s.isClosed() || s.deliverClip(context.Background(), done, clip) != nil {
 		s.log.Info("phone has gone; holding the clip for its next visit", "id", m.ID)
@@ -578,5 +609,85 @@ func (s *session) deliverHeld() {
 			s.agent.hold(s.userID, c)
 			return
 		}
+	}
+}
+
+// describeSound has the LLM turn a clip description into a sound description, falling back to
+// the description itself.
+func (s *session) describeSound(ctx context.Context, clipDescription string) string {
+	text, err := s.rewrite(ctx, soundInstructions, clipDescription)
+	if err != nil || text == "" {
+		if ctx.Err() == nil {
+			s.log.Warn("sound description failed; using the clip description", "err", err)
+		}
+		return clipDescription
+	}
+	return text
+}
+
+// addSound runs the sound model on a finished clip, reporting the stage to the phone.
+func (s *session) addSound(ctx context.Context, id string, clip Video, prompt string, seed int64) (Video, error) {
+	release, err := s.agent.gpu.acquire(ctx, gpuSound)
+	if err != nil {
+		return Video{}, err
+	}
+	defer release()
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: id, Stage: "sound"})
+	s.log.Info("adding sound", "id", id, "prompt", prompt)
+	start := time.Now()
+	out, err := s.agent.cfg.Sound.AddSound(ctx, clip, prompt, seed)
+	if err == nil {
+		s.log.Info("sound added", "id", id, "took", time.Since(start).Round(time.Second), "bytes", len(out.Data))
+	}
+	return out, err
+}
+
+// runAddSound gives an existing clip (sent back by the phone) a soundtrack.
+func (s *session) runAddSound(ctx context.Context, m protocol.Peer) {
+	defer func() {
+		s.mu.Lock()
+		if c := s.videoJobs[m.ID]; c != nil {
+			c()
+			delete(s.videoJobs, m.ID)
+		}
+		s.mu.Unlock()
+	}()
+	fail := func(err error) { s.failRequest(m.ID, err) }
+	if s.agent.cfg.Sound == nil {
+		fail(errors.New("this home server can't add sound"))
+		return
+	}
+	file, err := s.images.Wait(ctx, m.ImageID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if file.MIME != "video/mp4" {
+		fail(errors.New("send the clip as an MP4"))
+		return
+	}
+	prompt := strings.TrimSpace(m.Prompt)
+	if m.Enhance && prompt != "" {
+		prompt = s.describeSound(ctx, prompt)
+	}
+	select {
+	case s.agent.imageSlots <- struct{}{}:
+		defer func() { <-s.agent.imageSlots }()
+	case <-ctx.Done():
+		fail(ctx.Err())
+		return
+	}
+	seed := m.Seed
+	if seed <= 0 {
+		seed = randomSeed()
+	}
+	voiced, err := s.addSound(ctx, m.ID, Video{MIME: file.MIME, Data: file.Data}, prompt, seed)
+	if err != nil {
+		fail(err)
+		return
+	}
+	done := protocol.Peer{Type: protocol.PeerVideoDone, ID: m.ID, FileID: m.ID + "-video", Prompt: prompt, Seed: seed}
+	if s.isClosed() || s.deliverClip(context.Background(), done, voiced) != nil {
+		s.agent.hold(s.userID, heldClip{done: done, video: voiced, expires: time.Now().Add(heldClipTTL)})
 	}
 }

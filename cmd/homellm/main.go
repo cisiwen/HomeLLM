@@ -58,6 +58,8 @@ func main() {
 		imageModel    = flag.String("image-model", "flux1-schnell-fp8.safetensors", "ComfyUI checkpoint for image generation")
 		imageSteps    = flag.Int("image-steps", 4, "sampling steps per image (FLUX schnell is made for 4)")
 		videos        = flag.String("videos", "", "image-to-video backend: comfyui (Wan 2.2) or mock (empty = off)")
+		sound         = flag.String("sound", "", "add-sound backend: foley (HunyuanVideo-Foley service) or mock (empty = off)")
+		foleyURL      = flag.String("foley-url", "http://127.0.0.1:8190", "base URL of the Foley service (deploy/foley)")
 		stun          = flag.String("stun", "stun:stun.l.google.com:19302", "comma-separated STUN URLs")
 		turn          = flag.String("turn", "", "optional TURN URL for networks where a direct path fails, e.g. turn:turn.example.com:3478")
 		turnUser      = flag.String("turn-user", "", "TURN username")
@@ -118,6 +120,17 @@ func main() {
 		fatal("unknown -videos", fmt.Errorf("%q", *videos))
 	}
 
+	var soundBackend home.SoundBackend
+	switch *sound {
+	case "":
+	case "foley":
+		soundBackend = &home.Foley{BaseURL: *foleyURL}
+	case "mock":
+		soundBackend = home.MockSound{}
+	default:
+		fatal("unknown -sound", fmt.Errorf("%q", *sound))
+	}
+
 	var ice []webrtc.ICEServer
 	if *stun != "" {
 		ice = append(ice, webrtc.ICEServer{URLs: strings.Split(*stun, ",")})
@@ -135,6 +148,7 @@ func main() {
 		Backend:         backend,
 		Images:          imageBackend,
 		Videos:          videoBackend,
+		Sound:           soundBackend,
 		MaxConcurrent:   *maxConcurrent,
 		ContextTokens:   *contextTokens,
 		Approve: func(ctx context.Context, userID string) bool {
@@ -194,7 +208,7 @@ func main() {
 		}()
 	}
 
-	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos)
+	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "sound", *sound)
 	fmt.Println(`Type "p" + Enter to show a pairing QR.`)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		fatal("agent stopped", err)

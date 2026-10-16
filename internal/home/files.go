@@ -13,9 +13,12 @@ import (
 	"github.com/wweng/homellm/protocol"
 )
 
-// MaxFileSize caps one received file. Phones should downscale photos before sending (vision
+// MaxFileSize caps one received image. Phones should downscale photos before sending (vision
 // models resize to about 1 megapixel anyway), so this only stops abuse.
 const MaxFileSize = 20 << 20
+
+// maxClipSize caps one received clip (sent back to have sound added).
+const maxClipSize = 64 << 20
 
 // imageStore holds the images one phone session has sent. A request on the chat channel can
 // arrive before the image it refers to has finished arriving on the files channel (they are
@@ -92,10 +95,10 @@ func (r *fileReceiver) onText(data []byte) {
 		switch {
 		case m.ID == "":
 			r.fail = "file id required"
-		case m.Size <= 0 || m.Size > MaxFileSize:
-			r.fail = fmt.Sprintf("file size must be 1..%d bytes", MaxFileSize)
-		case !strings.HasPrefix(m.MIME, "image/"):
-			r.fail = "only images are supported"
+		case m.Size <= 0 || m.Size > maxClipSize || (m.Size > MaxFileSize && !strings.HasPrefix(m.MIME, "video/")):
+			r.fail = fmt.Sprintf("file size must be 1..%d bytes (%d for a clip)", MaxFileSize, maxClipSize)
+		case !strings.HasPrefix(m.MIME, "image/") && m.MIME != "video/mp4":
+			r.fail = "only images and MP4 clips are supported"
 		default:
 			r.buf = make([]byte, 0, m.Size)
 		}
