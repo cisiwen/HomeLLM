@@ -75,10 +75,33 @@ func (c *ComfyUI) Compose(ctx context.Context, req MusicRequest) (Audio, error) 
 }
 
 // musicInstructions has the LLM pick a fitting instrumental style for a clip.
-const musicInstructions = "You choose background music for a short video clip. From the user's " +
-	"description of the clip, reply with only a JSON object: {\"tags\": \"genre, mood, 2-4 " +
-	"instruments, in English, under 20 words\", \"bpm\": tempo 60-160, \"key\": a key like " +
-	"\"A minor\" or \"D major\"}. Instrumental only. No preamble."
+// It gives an example rather than describing the tags' format: given "under 20 words", models
+// copied the phrase into the tags themselves.
+const musicInstructions = "You choose instrumental background music for a short video clip. From " +
+	"the user's description of the clip, pick a genre, a mood and two to four instruments, and " +
+	"reply with only a JSON object like this example: {\"tags\": \"lofi hip hop, mellow, " +
+	"electric piano, soft drums\", \"bpm\": 80, \"key\": \"A minor\"}. Tags are short English " +
+	"comma-separated words. No vocals, no singing, no lyrics. Tempo between 60 and 160. No preamble."
+
+// Tags that must never reach the music model: word-count phrases copied from instructions,
+// and anything asking for a voice in what is always an instrumental track.
+var (
+	wordCountTag = regexp.MustCompile(`(?i)\b(under|less than|at most|max(imum)?|up to)\s+\d+\s+words?\b`)
+	vocalTag     = regexp.MustCompile(`(?i)\b(vocals?|voices?|singing|singer|choir|lyrics?|rap(ping)?|humming)\b`)
+)
+
+// cleanMusicTags drops unwanted tags from a comma-separated list.
+func cleanMusicTags(tags string) string {
+	var kept []string
+	for _, t := range strings.Split(tags, ",") {
+		t = strings.TrimSpace(t)
+		if t == "" || wordCountTag.MatchString(t) || vocalTag.MatchString(t) {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	return strings.Join(kept, ", ")
+}
 
 var keyPattern = regexp.MustCompile(`^[A-G][#b]? (major|minor)$`)
 
@@ -93,7 +116,7 @@ func parseMusicBrief(reply string) (tags string, bpm int, key string) {
 			Key  string          `json:"key"`
 		}
 		if json.Unmarshal([]byte(reply[i:j+1]), &b) == nil {
-			if t := strings.TrimSpace(b.Tags); t != "" {
+			if t := cleanMusicTags(b.Tags); t != "" {
 				tags = t
 			}
 			if n, err := strconv.Atoi(strings.Trim(string(b.BPM), `" `)); err == nil && n >= 50 && n <= 200 {

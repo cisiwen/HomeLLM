@@ -21,6 +21,9 @@ func TestParseMusicBrief(t *testing.T) {
 		{"Sure!\n```json\n{\"tags\":\"epic orchestral\",\"bpm\":\"128\",\"key\":\"D major\"}\n```", "epic orchestral", 128, "D major"},
 		{`{"tags": "x", "bpm": 900, "key": "H dorian"}`, "x", 90, "C major"}, // out of range -> defaults
 		{"no json at all", "calm cinematic ambient, soft piano, warm pads", 90, "C major"},
+		// What Gemma really sent: an instruction phrase and a vocal tag among the styles.
+		{`{"tags": "electronic, whimsical, synth, piano, vocals (wordless), dreamlike, under 16 words", "bpm": 120, "key": "C major"}`, "electronic, whimsical, synth, piano, dreamlike", 120, "C major"},
+		{`{"tags": "choir, Under 20 Words", "bpm": 70, "key": "E minor"}`, "calm cinematic ambient, soft piano, warm pads", 70, "E minor"}, // nothing left -> default
 	}
 	for _, c := range cases {
 		tags, bpm, key := parseMusicBrief(c.reply)
