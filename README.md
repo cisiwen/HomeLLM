@@ -109,6 +109,34 @@ next request waits while it loads again: about 10 s, or a minute or more on the 
 a reboot. `30m` frees the GPU when you're not chatting without pausing a conversation; `-1`
 keeps the model loaded permanently. Restart Ollama afterwards (`deploy/restart-ollama.ps1`).
 
+## Tunnel: reach a PC's localhost services from anywhere
+
+`tunnel-home` (on the PC) and `tunnel-client` (on the machine you work from) forward TCP over
+the same signalling, pairing and signed-answer scheme, so something that listens only on
+`127.0.0.1` on the PC (e.g. the windows-mcp server on 8000) is usable from any network with no
+open ports. Only ports on `-ports` are ever forwarded, and only to `127.0.0.1`.
+
+```bash
+go build -o bin/ ./cmd/tunnel-home ./cmd/tunnel-client
+```
+
+On the PC (service stopped), pair once, then run `deploy/install-tunnel-windows.ps1`:
+
+```bash
+tunnel-home -signal wss://<signalling-host>/prod -ports 8000 -pair
+```
+
+On the client, with the blob it printed. Against the real signalling use Cognito sign-in; the
+dev server (`signal-dev`) takes `-token <any user id>` instead:
+
+```bash
+tunnel-client pair -qr '<blob>' -cognito-pool <pool-id> -cognito-client <client-id> -username you@example.com
+tunnel-client serve -listen 127.0.0.1:8000 -port 8000 -cognito-pool <pool-id> -cognito-client <client-id> -username you@example.com
+```
+
+The password comes from `$TUNNEL_PASSWORD` or a prompt. If the client's network blocks UDP,
+pass `-turn turn:host:3478 -turn-user ... -turn-pass ...` to both sides.
+
 ## Data channel protocol
 
 The phone creates two ordered, reliable channels:
