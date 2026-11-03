@@ -116,6 +116,27 @@ the same signalling, pairing and signed-answer scheme, so something that listens
 `127.0.0.1` on the PC (e.g. the windows-mcp server on 8000) is usable from any network with no
 open ports. Only ports on `-ports` are ever forwarded, and only to `127.0.0.1`.
 
+```
+Your Mac (any network)              AWS account                      Home PC
+┌─────────────────────────┐         ┌──────────────────────┐         ┌─────────────────────────┐
+│ Claude Code (MCP client)│         │ Cognito              │         │ windows-mcp             │
+│        │                │         │   │ verifies token   │         │ 127.0.0.1:8000 + key    │
+│        ▼                │         │   ▼                  │         │        ▲                │
+│ tunnel-client           │─sign in▶│ HomeLlmStack         │◀connect─│ tunnel-home             │
+│ 127.0.0.1:18000         │         │ (signalling API)     │         │ (boot-time task)        │
+└────────┬────────────────┘         └──────────────────────┘         └────────┬────────────────┘
+         │                                                                    │
+         └────────────── direct WebRTC data channel (encrypted) ──────────────┘
+                  STUN for NAT traversal; TURN relay if UDP is blocked
+```
+
+1. `tunnel-client` signs in to Cognito and both tunnel programs connect **out** to the signalling
+   API, so the PC needs no inbound ports.
+2. They swap one WebRTC offer/answer through signalling; the answer is signed with the PC's
+   Ed25519 key, which the client pinned when it paired.
+3. After that the traffic goes directly between them over an encrypted data channel (one channel
+   per forwarded TCP connection) and never touches AWS.
+
 ```bash
 go build -o bin/ ./cmd/tunnel-home ./cmd/tunnel-client
 ```
