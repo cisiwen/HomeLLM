@@ -30,6 +30,9 @@ with **no open ports, no VPN, and no relay server in the data path**.
 | `cmd/homellm` | Home server binary |
 | `cmd/signal-dev` | Dev signalling server binary |
 | `cmd/testclient` | Plays the phone's role, for testing without a phone |
+| `cmd/tunnel-home`, `cmd/tunnel-client` | Forward a PC's localhost TCP ports over the same scheme (see "Tunnel" below) |
+| `internal/tunnel/` | The tunnel's forwarding logic |
+| `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley) |
 
 Android side: `AndroidStreamer/app/src/main/java/com/androidstreamer/app/homellm/`
 (menu: **+ → Home AI**).
@@ -81,6 +84,30 @@ bin/homellm -signal ws://127.0.0.1:8090/ws -model qwen2.5vl:7b
 Any OpenAI-compatible server works through `-llm-url` (llama.cpp `llama-server`, LM Studio,
 vLLM). Pass `-vision=false` for text-only models; the app then hides its attach button.
 
+## Production signalling
+
+The real signalling server is `HomeLlmStack` in `StreamerInfraStructure/cdk`
+(`lambda-homellm`: API Gateway WebSocket + Lambda + DynamoDB). It checks each home server's
+device secret and each phone's Cognito ID token at `$connect`. The message protocol is the
+same as `signal-dev`'s, so nothing here changes between the two.
+
+| Value | Current deployment (AWS account 323455446472, ap-southeast-2) |
+|---|---|
+| Signalling URL (`-signal`) | `wss://it8qx5mjlk.execute-api.ap-southeast-2.amazonaws.com/prod` |
+| Cognito user pool (`-cognito-pool`) | `ap-southeast-2_z1WRw9nUz` |
+| Cognito app client (`-cognito-client`) | `27ubaplgpe7r5gli1fmnp737kf` |
+
+These come from the stacks' outputs (`HomeLlmStack.HomeLlmWebSocketUrl`, and
+`CognitoInfraStack.UserPoolId`/`UserPoolClientId`). Check there if they ever change: a stack
+rebuilt from scratch gets a new URL or IDs.
+
+**Moving to a new deployment** (as happened when the previous account was suspended): re-run
+the installer with the new `-SignalUrl`. The PC can keep its `data\identity.json`, since a new
+signalling backend registers a device the first time it connects. Pairings are stored by the
+signalling backend, though, and each phone saved the old URL from its QR code, so remove the
+PC in the app and pair again (`homellm.exe pair`). Users also have to sign up again if the
+Cognito user pool is new.
+
 ## Running on Windows as a background service
 
 Build on any machine, then copy `homellm.exe.new` and `deploy/install-windows.ps1` into one
@@ -91,11 +118,13 @@ GOOS=windows GOARCH=amd64 go build -o homellm.exe.new ./cmd/homellm
 ```
 
 Then run this in an elevated PowerShell on the PC. Re-running it later updates a running
-install.
+install, including switching it to a new signalling URL.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install-windows.ps1 -SignalUrl ws://<signalling-host>:8090/ws -Model gemma3:12b
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -SignalUrl wss://it8qx5mjlk.execute-api.ap-southeast-2.amazonaws.com/prod -Model gemma3:12b
 ```
+
+For testing against a local `signal-dev` instead, pass `-SignalUrl ws://<signalling-host>:8090/ws`.
 
 The installer registers a scheduled task named `HomeLLM`. It starts at boot (no login needed,
 no window) and restarts the server if it exits. Output goes to `homellm.log` next to the exe.
@@ -144,15 +173,19 @@ go build -o bin/ ./cmd/tunnel-home ./cmd/tunnel-client
 On the PC (service stopped), pair once, then run `deploy/install-tunnel-windows.ps1`:
 
 ```bash
-tunnel-home -signal wss://<signalling-host>/prod -ports 8000 -pair
+tunnel-home -signal wss://it8qx5mjlk.execute-api.ap-southeast-2.amazonaws.com/prod -ports 8000 -pair
 ```
 
-On the client, with the blob it printed. Against the real signalling use Cognito sign-in; the
-dev server (`signal-dev`) takes `-token <any user id>` instead:
+On the client, with the blob it printed. Against the real signalling use Cognito sign-in (values
+from "Production signalling" above); the dev server (`signal-dev`) takes `-token <any user id>`
+instead:
 
 ```bash
-tunnel-client pair -qr '<blob>' -cognito-pool <pool-id> -cognito-client <client-id> -username you@example.com
-tunnel-client serve -listen 127.0.0.1:8000 -port 8000 -cognito-pool <pool-id> -cognito-client <client-id> -username you@example.com
+tunnel-client pair -qr '<blob>' -cognito-pool ap-southeast-2_z1WRw9nUz -cognito-client 27ubaplgpe7r5gli1fmnp737kf -username you@example.com
+```
+
+```bash
+tunnel-client serve -listen 127.0.0.1:8000 -port 8000 -cognito-pool ap-southeast-2_z1WRw9nUz -cognito-client 27ubaplgpe7r5gli1fmnp737kf -username you@example.com
 ```
 
 The password comes from `$TUNNEL_PASSWORD` or a prompt. If the client's network blocks UDP,
@@ -169,15 +202,16 @@ The phone creates two ordered, reliable channels:
   It's a separate channel so an image doesn't hold up streamed tokens. The phone limits how much
   data it queues (`bufferedAmount`) and downscales photos to 1280 px first.
 
-## Before production
+## Production notes
 
 The dev signalling server is **not** safe to expose: it trusts phone tokens without verifying
-them, and trusts a device's secret the first time it sees it. To go live:
+them. Use the production backend instead (see "Production signalling" above): it verifies each
+phone's Cognito ID token at `$connect`, and only a few messages per connection go through it, so
+it costs a few cents. Like the dev server, it registers a home server's device ID and secret
+the first time that ID connects, and checks the secret on every later connection.
 
-- **Signalling backend.** The cheapest fit for this project is the same setup as
-  `StreamerInfraStructure/lambda-videochat`: API Gateway WebSocket + Lambda + DynamoDB, with the
-  Cognito token verified at `$connect`. Only a few messages per connection go through it, so it
-  costs a few cents. The message protocol in `protocol/` stays unchanged.
+Still open:
+
 - **TURN fallback.** Some networks (strict mobile carriers, corporate Wi-Fi) block direct paths.
   Add a TURN server with `-turn` (Cloudflare and Metered offer free tiers) and the same
   `IceServer` on Android. Traffic through TURN is still end-to-end encrypted.
