@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeLLM Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">HomeLLM <b>Studio</b></div>
+  <div class="stat" id="conn"><span class="dot"></span><span id="connText">connecting…</span></div>
+  <div class="stat" title="GPU memory in use on the home PC">
+    GPU <div class="meter"><div id="vramBar"></div></div><span id="vramText">–</span>
+  </div>
+  <div class="stat" id="llmStat" title="Ollama models loaded on the GPU">LLM <span id="llmText">–</span></div>
+  <div class="spacer"></div>
+  <button class="ghost" id="unloadLlm" title="Unload Ollama models so the video model gets the whole GPU">Unload LLM</button>
+  <button class="ghost" id="freeVram" title="Ask ComfyUI to unload its models from the GPU">Free VRAM</button>
+  <button class="ghost" id="pairCodeBtn" title="Get a one-time code to pair a browser (homellm.eiuoo.com) with this PC">Pairing code</button>
+  <button class="ghost" id="openFolder" title="Show saved runs in Finder">Runs folder</button>
+  <button class="ghost" id="quit" title="Stop the studio and its SSH tunnel">Quit</button>
+</header>
+
+<main>
+<section id="panel">
+  <nav class="tabs" id="tabs">
+    <button data-mode="i2v" class="on">Image → Video</button>
+    <button data-mode="t2v">Text → Video</button>
+    <button data-mode="chain">Text → Image → Video</button>
+    <button data-mode="t2i">Text → Image</button>
+  </nav>
+  <p class="modeNote" id="modeNote"></p>
+
+  <div class="field" id="startField">
+    <label>Start image</label>
+    <div id="drop" class="drop" tabindex="0">
+      <img id="startPreview" alt="">
+      <span id="dropHint">Drop, paste or click to choose a picture</span>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <small>Wan keeps the picture as frame 1 and invents the motion after it. It's centre-cropped to the video size.</small>
+  </div>
+
+  <div class="field" id="imagePromptField">
+    <label for="imagePrompt">First frame prompt <small class="inline">(FLUX)</small></label>
+    <textarea id="imagePrompt" rows="2" placeholder="Leave empty to use the video prompt"></textarea>
+  </div>
+
+  <div class="field">
+    <label for="prompt" id="promptLabel">Prompt</label>
+    <textarea id="prompt" rows="4"></textarea>
+    <div class="chips" id="promptChips"></div>
+    <small id="promptHelp"></small>
+  </div>
+
+  <details class="field" id="negField">
+    <summary>Negative prompt</summary>
+    <textarea id="negative" rows="3"></textarea>
+    <small>Only matters when CFG is above 1. With the 4-step LoRA (CFG 1) it's ignored.</small>
+  </details>
+
+  <div class="row">
+    <div class="field">
+      <label for="size">Size</label>
+      <select id="size"></select>
+    </div>
+    <div class="field" id="framesField">
+      <label for="frames">Length <output id="framesOut"></output></label>
+      <input type="range" id="frames" min="17" max="121" step="4">
+    </div>
+  </div>
+  <small class="hint" id="sizeHelp">480p is Wan's fast size. 720p looks sharper but takes about 3× as long and may not fit 12 GB at long lengths.</small>
+
+  <div class="group" id="videoGroup">
+    <div class="groupHead">
+      <label class="switch"><input type="checkbox" id="lora"> <span>Speed LoRA (lightx2v 4-step)</span></label>
+    </div>
+    <small>A distilled LoRA that lets Wan finish in 4 steps at CFG 1 instead of ~20 steps at CFG 3.5: about 10× faster, a little less motion and detail. Turning it off resets steps/CFG/shift to Wan's own defaults.</small>
+    <div class="grid">
+      <div class="field"><label for="steps">Steps</label><input type="number" id="steps" min="1" max="60"></div>
+      <div class="field"><label for="split">Switch at step</label><input type="number" id="split" min="0" max="60"></div>
+      <div class="field"><label for="cfg">CFG</label><input type="number" id="cfg" min="1" max="10" step="0.5"></div>
+      <div class="field"><label for="shift">Shift</label><input type="number" id="shift" min="1" max="20" step="0.5"></div>
+      <div class="field"><label for="loraStrength">LoRA strength</label><input type="number" id="loraStrength" min="0" max="2" step="0.1"></div>
+      <div class="field"><label for="fps">FPS</label><input type="number" id="fps" min="8" max="30"></div>
+    </div>
+    <details class="explain">
+      <summary>What these do</summary>
+      <dl>
+        <dt>Steps</dt><dd>How many denoising passes. More = more refined, slower. Each step costs the same time.</dd>
+        <dt>Switch at step</dt><dd>Wan 2.2 14B is two models. The <b>high-noise</b> expert does the first steps (layout and motion), the <b>low-noise</b> expert the rest (detail). Switching later gives more motion planning, earlier gives more detail.</dd>
+        <dt>CFG</dt><dd>How hard the prompt is followed versus the negative prompt. 1 means the negative prompt is skipped (and each step is twice as fast).</dd>
+        <dt>Shift</dt><dd>Moves the noise schedule. Higher spends more of the steps on big structure and motion, lower on fine detail.</dd>
+        <dt>FPS</dt><dd>Only playback speed: Wan is trained at 16 fps. Length in seconds = frames ÷ fps.</dd>
+      </dl>
+    </details>
+  </div>
+
+  <div class="group" id="fluxGroup">
+    <div class="grid">
+      <div class="field"><label for="fluxSteps">FLUX steps</label><input type="number" id="fluxSteps" min="1" max="12"></div>
+    </div>
+    <small>FLUX schnell is distilled for 4 steps; 1–2 already gives a usable draft.</small>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label for="seed">Seed</label>
+      <div class="seedRow">
+        <input type="number" id="seed" min="0">
+        <button class="ghost" id="dice" title="New random seed">🎲</button>
+        <label class="switch small" title="Keep the seed for the next run, to change one setting at a time"><input type="checkbox" id="seedLock"> <span>lock</span></label>
+      </div>
+    </div>
+  </div>
+  <small class="hint">Same seed + same settings = the same video. Lock it, then change one thing to see what that thing does.</small>
+
+  <div class="group">
+    <div class="groupHead"><b>Experiment</b></div>
+    <div class="row">
+      <div class="field">
+        <label for="sweep">Compare values of</label>
+        <select id="sweep">
+          <option value="">nothing (one run)</option>
+          <option value="seed">seed (variations)</option>
+          <option value="steps">steps</option>
+          <option value="split">switch at step</option>
+          <option value="shift">shift</option>
+          <option value="cfg">CFG</option>
+          <option value="loraStrength">LoRA strength</option>
+          <option value="frames">length (frames)</option>
+          <option value="fluxSteps">FLUX steps</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="sweepValues" id="sweepLabel">Values</label>
+        <input id="sweepValues" placeholder="e.g. 4, 6, 8">
+      </div>
+    </div>
+    <small id="sweepHelp">Queues one run per value with everything else the same, so you can see what one setting does.</small>
+  </div>
+
+  <div class="actions">
+    <button id="go" class="primary">Generate</button>
+    <button id="showWf" class="ghost" title="See the ComfyUI workflow this will send">Workflow</button>
+  </div>
+  <p class="err" id="formErr"></p>
+</section>
+
+<section id="right">
+  <div id="live" class="live" hidden>
+    <div class="liveHead"><b>Queue</b><span id="queueText"></span><div class="spacer"></div><button class="ghost" id="cancelAll">Cancel all</button></div>
+    <div id="jobs"></div>
+  </div>
+
+  <div class="galleryHead">
+    <b>Results</b>
+    <input id="filter" placeholder="Filter by prompt…">
+    <select id="modeFilter">
+      <option value="">all modes</option>
+      <option value="i2v">image → video</option>
+      <option value="t2v">text → video</option>
+      <option value="chain">text → image → video</option>
+      <option value="t2i">text → image</option>
+    </select>
+    <div class="spacer"></div>
+    <button class="ghost" id="compareBtn" disabled>Compare selected</button>
+  </div>
+  <div id="gallery" class="gallery"></div>
+  <p class="empty" id="empty">No runs yet. Your results and their settings are saved here so you can compare them.</p>
+</section>
+</main>
+
+<dialog id="wfDialog">
+  <div class="dlgHead"><b id="wfTitle">Workflow</b><div class="spacer"></div>
+    <button class="ghost" id="wfCopy">Copy</button>
+    <button class="ghost" id="wfSave">Save .json</button>
+    <button class="ghost" id="wfClose">Close</button></div>
+  <p class="small">This is ComfyUI's API format: every node, its inputs and its links (<code>["node", output]</code>). Drop the saved file onto ComfyUI to open it there.</p>
+  <pre id="wfText"></pre>
+</dialog>
+
+<dialog id="codeDialog">
+  <div class="dlgHead"><b>Pairing code</b><div class="spacer"></div><button class="ghost" id="codeClose">Close</button></div>
+  <p class="bigCode" id="codeText">…</p>
+  <p class="small" id="codeNote"></p>
+</dialog>
+
+<dialog id="cmpDialog" class="wide">
+  <div class="dlgHead"><b>Compare</b><div class="spacer"></div>
+    <button class="ghost" id="cmpSync">Play together from start</button>
+    <button class="ghost" id="cmpClose">Close</button></div>
+  <div id="cmpGrid" class="cmpGrid"></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

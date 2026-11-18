@@ -30,6 +30,7 @@ with **no open ports, no VPN, and no relay server in the data path**.
 | `cmd/homellm` | Home server binary |
 | `cmd/signal-dev` | Dev signalling server binary |
 | `cmd/testclient` | Plays the phone's role, for testing without a phone |
+| `cmd/studio` | HomeLLM Studio: a desktop playground for the PC's video and image models (see below) |
 | `cmd/tunnel-home`, `cmd/tunnel-client` | Forward a PC's localhost TCP ports over the same scheme (see "Tunnel" below) |
 | `internal/tunnel/` | The tunnel's forwarding logic |
 | `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley) |
@@ -113,6 +114,36 @@ Without a GPU, `-restyle mock` posterizes the photo, and `testclient -image phot
 `restyle {id, image_id, prompt?, enhance?, seed?}` and gets the same `image_prompt`,
 `image_progress` and `image_done` replies as `imagine`. `hello` says `restyle: true` when it's
 on.
+
+## HomeLLM Studio: learning image-to-video and text-to-video
+
+`cmd/studio` is a desktop playground for the home PC's ComfyUI models. It's for learning what
+the settings do: every control is exposed and explained, runs can sweep one setting, and each
+result is saved with its settings and timings so runs can be compared side by side.
+
+- **Image → Video**: Wan 2.2 14B i2v (the same models the phone uses).
+- **Text → Video**: Wan 2.2 14B t2v with the lightx2v 4-step LoRAs.
+- **Text → Image → Video**: FLUX schnell draws frame 1, then Wan animates it, in one job.
+- **Text → Image**: FLUX schnell, to make start frames.
+
+It runs on the Mac, reaches ComfyUI (and Ollama, to unload the LLM) through an SSH tunnel to the
+PC, and saves runs in `~/HomeLLM Studio/runs/<id>/` (`meta.json` + the files). Build it as an app:
+
+```bash
+deploy/build-studio-mac.sh cisiwen@192.168.1.120   # -> ~/Applications/HomeLLM Studio.app
+```
+
+or run it directly with `go run ./cmd/studio -host user@pc` (`-comfy http://127.0.0.1:8188`
+on the PC itself). `ssh user@pc` must work without a password prompt.
+
+Text-to-video needs four more files in ComfyUI's models folders (about 31 GB):
+`wan2.2_t2v_{high,low}_noise_14B_fp8_scaled.safetensors` (diffusion_models) and
+`wan2.2_t2v_lightx2v_4steps_lora_v1.1_{high,low}_noise.safetensors` (loras), from
+[Comfy-Org/Wan-2.2](https://huggingface.co/Comfy-Org/Wan-2.2/tree/main/split_files).
+
+ComfyUI keeps models in RAM between jobs. Wan i2v, Wan t2v and FLUX all together are more than
+the PC's 96 GB, and ComfyUI crashes. So the studio asks ComfyUI to drop its models before a job
+that needs different ones.
 
 ## Production signalling
 
