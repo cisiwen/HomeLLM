@@ -146,6 +146,8 @@ type Peer struct {
 	Sound   bool   `json:"sound,omitempty"` // hello: can add sound; animate: add sound too
 	Music   bool   `json:"music,omitempty"` // hello: can add music; animate: add music too
 	Restyle bool   `json:"restyle,omitempty"`
+	// hello: web apps on the PC reachable over ChannelHTTP (see httprelay.go).
+	Apps []string `json:"apps,omitempty"`
 
 	// chat: imagine / image_prompt / image_progress / image_done
 	Prompt  string `json:"prompt,omitempty"`

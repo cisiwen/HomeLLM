@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,6 +59,9 @@ type Config struct {
 	// ContextTokens is the model's context size. Requests drop their oldest messages to fit,
 	// leaving room for the reply. 0 disables trimming.
 	ContextTokens int
+	// Apps are web apps on this PC that paired clients may use over ChannelHTTP, by name
+	// (e.g. "dubbing" -> http://127.0.0.1:8000). See ParseApps.
+	Apps map[string]*url.URL
 	// Approve asks the owner whether userID may pair. It must return within ctx's deadline.
 	Approve func(ctx context.Context, userID string) bool
 }
@@ -431,4 +435,14 @@ func (a *Agent) takeHeld(userID string) []heldClip {
 }
 
 // canMakeMusic says whether music is on: a composer and a mixer.
+// appNames lists the relayed web apps for hello, sorted.
+func (a *Agent) appNames() []string {
+	names := make([]string, 0, len(a.cfg.Apps))
+	for n := range a.cfg.Apps {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (a *Agent) canMakeMusic() bool { return a.cfg.Music != nil && a.cfg.Mixer != nil }

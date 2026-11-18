@@ -39,6 +39,7 @@ type session struct {
 	sendMu sync.Mutex
 	chat   *webrtc.DataChannel
 	files  *webrtc.DataChannel
+	relay  *httpRelay // ChannelHTTP, when the client opened it
 	// fileOutMu keeps one outgoing file in flight at a time - the files channel's binary
 	// chunks carry no header, so files can't interleave.
 	fileOutMu sync.Mutex
@@ -152,6 +153,15 @@ func (s *session) onDataChannel(dc *webrtc.DataChannel) {
 				rx.onBinary(m.Data)
 			}
 		})
+	case protocol.ChannelHTTP:
+		if len(s.agent.cfg.Apps) == 0 {
+			s.log.Warn("client opened the web-app channel, but no -app is configured")
+			return
+		}
+		r := newHTTPRelay(dc, s.agent.cfg.Apps, s.log)
+		s.mu.Lock()
+		s.relay = r
+		s.mu.Unlock()
 	default:
 		s.log.Warn("ignoring unknown data channel", "label", dc.Label())
 	}
@@ -179,7 +189,7 @@ func (s *session) onChat(data []byte) {
 		b := s.agent.cfg.Backend
 		s.send(s.chat, protocol.Peer{Type: protocol.PeerHello, Name: s.agent.id.Name, Model: b.DefaultModel(), Vision: b.Vision(),
 			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil, Sound: s.agent.cfg.Sound != nil,
-			Music: s.agent.canMakeMusic(), Restyle: s.agent.cfg.Restyle != nil})
+			Music: s.agent.canMakeMusic(), Restyle: s.agent.cfg.Restyle != nil, Apps: s.agent.appNames()})
 		go s.deliverHeld()
 	case protocol.PeerRequest:
 		if ctx, ok := s.track(m.ID); ok {
@@ -329,7 +339,11 @@ func (s *session) close() {
 	for _, cancel := range s.inflight {
 		cancel()
 	}
+	relay := s.relay
 	s.mu.Unlock()
+	if relay != nil {
+		relay.close()
+	}
 	s.pc.Close()
 	s.agent.removeSession(s)
 }

@@ -89,7 +89,13 @@ func main() {
 		controlAddr   = flag.String("control", defaultControlAddr, "localhost address `homellm pair` uses to reach this server (empty = off)")
 		logFile       = flag.String("log", "", "append all output to this file instead of the console (for running as a service)")
 	)
+	var appSpecs multiFlag
+	flag.Var(&appSpecs, "app", "a web app on this PC that paired clients may use, name=url (repeatable), e.g. dubbing=http://127.0.0.1:8000")
 	flag.Parse()
+	apps, err := home.ParseApps(appSpecs)
+	if err != nil {
+		fatal("bad -app", err)
+	}
 
 	if *logFile != "" {
 		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -194,6 +200,7 @@ func main() {
 		Images:          imageBackend,
 		Videos:          videoBackend,
 		Restyle:         restyleBackend,
+		Apps:            apps,
 		Sound:           soundBackend,
 		Music:           musicBackend,
 		Mixer:           mixer,
@@ -256,7 +263,7 @@ func main() {
 		}()
 	}
 
-	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "restyle", *restyle, "sound", *sound, "music", *music)
+	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "restyle", *restyle, "sound", *sound, "music", *music, "apps", appSpecs)
 	fmt.Println(`Type "p" + Enter to show a pairing QR.`)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		fatal("agent stopped", err)
@@ -325,3 +332,9 @@ func fatal(msg string, err error) {
 	slog.Error(msg, "err", err)
 	os.Exit(1)
 }
+
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
