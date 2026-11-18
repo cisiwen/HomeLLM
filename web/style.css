@@ -34,6 +34,7 @@ code { background: var(--soft); padding: 1px 5px; border-radius: 5px; font-size:
 .row { display: flex; gap: 8px; align-items: center; }
 .row.end { justify-content: flex-end; }
 .spacer { flex: 1; }
+.navLink { color: var(--accent); text-decoration: none; font-weight: 600; font-size: 14px; }
 
 #app { height: 100%; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }

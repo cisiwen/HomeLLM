@@ -139,7 +139,22 @@ prompt. The code never travels in plain form: signalling sees only a hash, and t
 its public key with an HMAC keyed by the code, which the browser checks
 (`protocol/paircode.go`). The QR's JSON can still be pasted instead.
 
-**Same Wi-Fi as the PC:** browsers hide their local IP behind a `.local` name, so the PC has to
+**Web apps on the PC (`/dubbing/`).** HomeLLM can also carry a browser's web requests to apps
+running on the PC itself, so they work from anywhere with nothing exposed to the internet:
+
+```bash
+homellm ... -app dubbing=http://127.0.0.1:8000   # repeatable; loopback URLs only
+```
+
+hello lists the app names, and the client opens a third data channel, `http`, that multiplexes
+requests with credit-based flow control, so a long video only streams as fast as the browser
+reads it (`protocol/httprelay.go`, `internal/home/httprelay.go`). `web/dubbing/` uses it for the
+dubbing studio (video-dubbing repo): CloudFront serves the studio's page at `/dubbing/app/`, a
+service worker (`web/dubbing/sw.js`) hands its `api/` and `media/` requests to the `/dubbing/`
+page, and that page relays them to the PC. Throughput is whatever the PC can upload: on its
+Wi-Fi that's currently about 0.4 MB/s, so long videos take a few seconds to seek.
+
+ browsers hide their local IP behind a `.local` name, so the PC has to
 accept the browser's incoming connection, which Windows Firewall blocks on a "Public" network
 unless `homellm.exe` has an inbound rule (phones share their real IP, so they don't need one).
 Away from home the browser connects like the phone does.
