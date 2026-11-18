@@ -42,6 +42,9 @@ type Config struct {
 	Videos VideoBackend
 	// Sound adds soundtracks to clips; nil turns it off. Shares the GPU too.
 	Sound SoundBackend
+	// Restyle redraws photos in another style (e.g. cartoon); nil turns it off. Shares the
+	// GPU like Images.
+	Restyle RestyleBackend
 	// Music composes background tracks (in ComfyUI, so the image GPU mode) and Mixer lays them
 	// under clips; music is off unless both are set.
 	Music MusicBackend
@@ -317,6 +320,9 @@ func (a *Agent) freeGPUFor(ctx context.Context, mode string) error {
 		}
 		if a.cfg.Videos != nil {
 			errs = append(errs, a.cfg.Videos.Free(ctx))
+		}
+		if a.cfg.Restyle != nil {
+			errs = append(errs, a.cfg.Restyle.Free(ctx))
 		}
 		if a.cfg.Music != nil {
 			errs = append(errs, a.cfg.Music.Free(ctx))

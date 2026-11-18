@@ -46,6 +46,51 @@ func runImagineCheck(args []string) {
 	fmt.Printf("done in %s: %d bytes -> %s\n", time.Since(start).Round(100*time.Millisecond), len(img.Data), *out)
 }
 
+// runRestyleCheck is `homellm restyle [flags] -image photo.jpg [style]`: redraws one photo with
+// ComfyUI's FLUX.1 Kontext (a cartoon when no style is given), to check and time this PC's
+// restyle setup.
+func runRestyleCheck(args []string) {
+	fs := flag.NewFlagSet("restyle", flag.ExitOnError)
+	comfyURL := fs.String("comfy-url", "http://127.0.0.1:8188", "base URL of the ComfyUI server")
+	imagePath := fs.String("image", "", "the photo (JPEG or PNG)")
+	steps := fs.Int("restyle-steps", 20, "sampling steps")
+	seed := fs.Int64("seed", 1, "seed")
+	out := fs.String("out", "homellm-restyle.jpg", "where to save the result")
+	fs.Parse(args)
+	if *imagePath == "" {
+		fmt.Fprintln(os.Stderr, "usage: homellm restyle [flags] -image photo.jpg [style, default cartoon]")
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(*imagePath)
+	if err != nil {
+		fatal("reading -image", err)
+	}
+	mime := "image/jpeg"
+	if strings.HasSuffix(strings.ToLower(*imagePath), ".png") {
+		mime = "image/png"
+	}
+	prompt := home.RestylePrompt(strings.Join(fs.Args(), " "))
+
+	k := home.DefaultFluxKontext
+	k.Steps = *steps
+	c := &home.ComfyUI{BaseURL: *comfyURL, Kontext: k}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	start := time.Now()
+	fmt.Printf("instruction: %s\n", prompt)
+	img, err := c.Restyle(ctx, home.RestyleRequest{Image: home.Image{MIME: mime, Data: data}, Prompt: prompt, Seed: *seed}, func(step, total int) {
+		fmt.Printf("[%s] step %d/%d\n", time.Since(start).Round(100*time.Millisecond), step, total)
+	})
+	if err != nil {
+		fatal("restyling", err)
+	}
+	if err := os.WriteFile(*out, img.Data, 0o644); err != nil {
+		fatal("saving", err)
+	}
+	w, h := home.ImageSize(img)
+	fmt.Printf("done in %s: %dx%d, %d bytes -> %s\n", time.Since(start).Round(100*time.Millisecond), w, h, len(img.Data), *out)
+}
+
 // runAnimateCheck is `homellm animate [flags] -image start.jpg <motion prompt>`: makes one
 // clip through ComfyUI's Wan 2.2 image-to-video, to check and time this PC's video setup.
 func runAnimateCheck(args []string) {

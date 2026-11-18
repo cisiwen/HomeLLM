@@ -77,6 +77,14 @@ func newFakeComfy(t *testing.T) (*fakeComfy, *httptest.Server) {
 		}
 		_ = png.Encode(w, image.NewRGBA(image.Rect(0, 0, 64, 32)))
 	})
+	mux.HandleFunc("/upload/image", func(w http.ResponseWriter, r *http.Request) {
+		_, hdr, err := r.FormFile("image")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": hdr.Filename, "subfolder": ""})
+	})
 	mux.HandleFunc("/free", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.freed = true

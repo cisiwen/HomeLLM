@@ -84,6 +84,36 @@ bin/homellm -signal ws://127.0.0.1:8090/ws -model qwen2.5vl:7b
 Any OpenAI-compatible server works through `-llm-url` (llama.cpp `llama-server`, LM Studio,
 vLLM). Pass `-vision=false` for text-only models; the app then hides its attach button.
 
+### Restyling photos (cartoonise)
+
+`-restyle comfyui` lets the phone redraw a photo it sent in another style: a cartoon by
+default, or any style it names ("watercolour", "3D animated film", "anime"). It uses
+[FLUX.1 Kontext [dev]](https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI), an
+instruction-following editor that keeps the people and composition, in the same ComfyUI as
+`-images`. Put Comfy-Org's repackaged files in ComfyUI's `models` folder:
+
+| File | Folder |
+|---|---|
+| `flux1-dev-kontext_fp8_scaled.safetensors` | `models/diffusion_models` |
+| `clip_l.safetensors`, `t5xxl_fp8_e4m3fn_scaled.safetensors` | `models/text_encoders` |
+| `ae.safetensors` | `models/vae` |
+
+Check it and time it on the PC before turning it on (about 12 GB of VRAM; 20 steps):
+
+```bash
+homellm restyle -image photo.jpg
+```
+
+```bash
+homellm restyle -image photo.jpg watercolour painting
+```
+
+Without a GPU, `-restyle mock` posterizes the photo, and `testclient -image photo.jpg -restyle
+[-style watercolour] [-enhance]` drives the whole request. The phone sends
+`restyle {id, image_id, prompt?, enhance?, seed?}` and gets the same `image_prompt`,
+`image_progress` and `image_done` replies as `imagine`. `hello` says `restyle: true` when it's
+on.
+
 ## Production signalling
 
 The real signalling server is `HomeLlmStack` in `StreamerInfraStructure/cdk`

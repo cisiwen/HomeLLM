@@ -5,8 +5,9 @@
 // Console commands while running: "p" + Enter prints a new pairing QR; pairing requests are
 // approved by answering "y". When it runs as a background service with no console,
 // `homellm pair` in any terminal on the same PC does the same (see pairdesk.go).
-// `homellm imagine <prompt>`, `homellm animate -image x.jpg <prompt>` and `homellm music -clip
-// x.mp4 <tags>` check this PC's image, video and music setup (see imagine.go).
+// `homellm imagine <prompt>`, `homellm restyle -image x.jpg [style]`, `homellm animate -image
+// x.jpg <prompt>` and `homellm music -clip x.mp4 <tags>` check this PC's image, restyle, video
+// and music setup (see imagine.go).
 package main
 
 import (
@@ -39,6 +40,10 @@ func main() {
 		runImagineCheck(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "restyle" {
+		runRestyleCheck(os.Args[2:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "animate" {
 		runAnimateCheck(os.Args[2:])
 		return
@@ -61,6 +66,8 @@ func main() {
 		comfyURL      = flag.String("comfy-url", "http://127.0.0.1:8188", "base URL of the ComfyUI server")
 		imageModel    = flag.String("image-model", "flux1-schnell-fp8.safetensors", "ComfyUI checkpoint for image generation")
 		imageSteps    = flag.Int("image-steps", 4, "sampling steps per image (FLUX schnell is made for 4)")
+		restyle       = flag.String("restyle", "", "photo restyle (cartoonise) backend: comfyui (FLUX.1 Kontext) or mock (empty = off)")
+		restyleSteps  = flag.Int("restyle-steps", 20, "sampling steps per restyled photo (Kontext dev is made for 20)")
 		videos        = flag.String("videos", "", "image-to-video backend: comfyui (Wan 2.2) or mock (empty = off)")
 		sound         = flag.String("sound", "", "add-sound backend: foley (HunyuanVideo-Foley service) or mock (empty = off)")
 		foleyURL      = flag.String("foley-url", "http://127.0.0.1:8190", "base URL of the Foley service (deploy/foley)")
@@ -113,6 +120,19 @@ func main() {
 		imageBackend = home.MockImage{}
 	default:
 		fatal("unknown -images", fmt.Errorf("%q", *images))
+	}
+
+	var restyleBackend home.RestyleBackend
+	switch *restyle {
+	case "":
+	case "comfyui":
+		k := home.DefaultFluxKontext
+		k.Steps = *restyleSteps
+		restyleBackend = &home.ComfyUI{BaseURL: *comfyURL, Kontext: k}
+	case "mock":
+		restyleBackend = home.MockRestyle{}
+	default:
+		fatal("unknown -restyle", fmt.Errorf("%q", *restyle))
 	}
 
 	var videoBackend home.VideoBackend
@@ -169,6 +189,7 @@ func main() {
 		Backend:         backend,
 		Images:          imageBackend,
 		Videos:          videoBackend,
+		Restyle:         restyleBackend,
 		Sound:           soundBackend,
 		Music:           musicBackend,
 		Mixer:           mixer,
@@ -231,7 +252,7 @@ func main() {
 		}()
 	}
 
-	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "sound", *sound, "music", *music)
+	slog.Info("home server starting", "name", id.Name, "device", id.DeviceID, "llm", *llm, "model", backend.DefaultModel(), "images", *images, "videos", *videos, "restyle", *restyle, "sound", *sound, "music", *music)
 	fmt.Println(`Type "p" + Enter to show a pairing QR.`)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		fatal("agent stopped", err)

@@ -135,13 +135,14 @@ type Peer struct {
 	// chat: error / files: file_error
 	Message string `json:"message,omitempty"`
 	// chat: hello reply. Images says this server can generate images (PeerImagine), Videos
-	// that it can animate them (PeerAnimate).
-	Name   string `json:"name,omitempty"`
-	Vision bool   `json:"vision,omitempty"`
-	Images bool   `json:"images,omitempty"`
-	Videos bool   `json:"videos,omitempty"`
-	Sound  bool   `json:"sound,omitempty"` // hello: can add sound; animate: add sound too
-	Music  bool   `json:"music,omitempty"` // hello: can add music; animate: add music too
+	// that it can animate them (PeerAnimate), Restyle that it can redraw photos (PeerRestyle).
+	Name    string `json:"name,omitempty"`
+	Vision  bool   `json:"vision,omitempty"`
+	Images  bool   `json:"images,omitempty"`
+	Videos  bool   `json:"videos,omitempty"`
+	Sound   bool   `json:"sound,omitempty"` // hello: can add sound; animate: add sound too
+	Music   bool   `json:"music,omitempty"` // hello: can add music; animate: add music too
+	Restyle bool   `json:"restyle,omitempty"`
 
 	// chat: imagine / image_prompt / image_progress / image_done
 	Prompt  string `json:"prompt,omitempty"`
@@ -192,6 +193,13 @@ const (
 	// files channel as file_id - possibly before or after this message, since the two
 	// channels are independent streams.
 	PeerImageDone = "image_done"
+
+	// chat, phone -> home: {id, image_id, prompt?, enhance?, seed?}. Redraws a photo already
+	// sent on the files channel in another style, keeping its people and composition. prompt
+	// is the style ("watercolour", "3D animated film"); empty means a cartoon. enhance has the
+	// LLM turn it into an English style description first. Replies like imagine:
+	// image_prompt (the full instruction used), image_progress, then image_done + the file.
+	PeerRestyle = "restyle"
 
 	// chat, phone -> home: {id, image_id, prompt, frames?, seed?}. Animates an image already
 	// sent on the files channel into a short clip; prompt describes the motion. Progress comes

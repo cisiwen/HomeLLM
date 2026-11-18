@@ -41,15 +41,17 @@ func main() {
 		image       = flag.String("image", "", "optional image file to attach")
 		cancelAfter = flag.Duration("cancel-after", 0, "send cancel after this long (tests cancellation)")
 		imagine     = flag.String("imagine", "", "generate an image from this prompt instead of chatting")
-		enhance     = flag.Bool("enhance", false, "with -imagine: let the LLM rewrite the prompt first")
-		out         = flag.String("out", "image.jpg", "with -imagine/-animate: where to save the result")
+		enhance     = flag.Bool("enhance", false, "with -imagine/-restyle: let the LLM rewrite the prompt first")
+		out         = flag.String("out", "image.jpg", "with -imagine/-animate/-restyle: where to save the result")
 		animate     = flag.String("animate", "", "with -image: animate it, with this motion prompt")
+		restyle     = flag.Bool("restyle", false, "with -image: redraw it in -style (default a cartoon)")
+		style       = flag.String("style", "", "with -restyle: the style, e.g. watercolour")
 		timeout     = flag.Duration("timeout", 2*time.Minute, "overall timeout")
 	)
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	opts := imagineOpts{prompt: *imagine, enhance: *enhance, out: *out, animate: *animate}
+	opts := imagineOpts{prompt: *imagine, enhance: *enhance, out: *out, animate: *animate, restyle: *restyle, style: *style}
 	if err := run(ctx, *qrJSON, *qrFile, *user, *skipPair, *prompt, *image, *cancelAfter, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
 		os.Exit(1)
@@ -61,6 +63,8 @@ type imagineOpts struct {
 	enhance bool
 	out     string
 	animate string
+	restyle bool
+	style   string
 }
 
 func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt, image string, cancelAfter time.Duration, im imagineOpts) error {
@@ -263,6 +267,17 @@ func run(ctx context.Context, qrJSON, qrFile, user string, skipPair bool, prompt
 		}
 		imageIDs = append(imageIDs, id)
 		fmt.Printf("sent image %s (%d bytes, %s)\n", id, len(data), mt)
+	}
+
+	if im.restyle {
+		if len(imageIDs) == 0 {
+			return errors.New("-restyle needs -image")
+		}
+		id := "sty-" + randomHex(4)
+		if err := send(chat, protocol.Peer{Type: protocol.PeerRestyle, ID: id, ImageID: imageIDs[0], Prompt: im.style, Enhance: im.enhance}); err != nil {
+			return err
+		}
+		return waitResult(ctx, im.out, protocol.PeerImageDone, incoming, received)
 	}
 
 	if im.animate != "" {

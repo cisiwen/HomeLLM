@@ -179,7 +179,7 @@ func (s *session) onChat(data []byte) {
 		b := s.agent.cfg.Backend
 		s.send(s.chat, protocol.Peer{Type: protocol.PeerHello, Name: s.agent.id.Name, Model: b.DefaultModel(), Vision: b.Vision(),
 			Images: s.agent.cfg.Images != nil, Videos: s.agent.cfg.Videos != nil, Sound: s.agent.cfg.Sound != nil,
-			Music: s.agent.canMakeMusic()})
+			Music: s.agent.canMakeMusic(), Restyle: s.agent.cfg.Restyle != nil})
 		go s.deliverHeld()
 	case protocol.PeerRequest:
 		if ctx, ok := s.track(m.ID); ok {
@@ -188,6 +188,10 @@ func (s *session) onChat(data []byte) {
 	case protocol.PeerImagine:
 		if ctx, ok := s.track(m.ID); ok {
 			go s.runImagine(ctx, m)
+		}
+	case protocol.PeerRestyle:
+		if ctx, ok := s.track(m.ID); ok {
+			go s.runRestyle(ctx, m)
 		}
 	case protocol.PeerAnimate:
 		if ctx, ok := s.trackVideo(m.ID); ok {
@@ -407,6 +411,84 @@ func (s *session) runImagine(ctx context.Context, m protocol.Peer) {
 		return
 	}
 	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageDone, ID: m.ID, FileID: fileID, Width: req.Width, Height: req.Height, Seed: req.Seed})
+}
+
+// restyleInstructions has the LLM turn a style request, in any language, into the short
+// English style description RestylePrompt wraps into Kontext's edit instruction.
+const restyleInstructions = "You help an image editor that redraws photos in a new art style. Turn the " +
+	"user's request into a short English description of that style, e.g. \"a watercolour painting " +
+	"with soft washes and visible paper texture\". Describe only the style, not the photo's content. " +
+	"Reply with only the description, under 30 words, no quotes or preamble."
+
+// runRestyle redraws a photo the phone sent in another style (a cartoon by default).
+func (s *session) runRestyle(ctx context.Context, m protocol.Peer) {
+	defer s.untrack(m.ID)
+	fail := func(err error) { s.failRequest(m.ID, err) }
+	restyler := s.agent.cfg.Restyle
+	if restyler == nil {
+		fail(errors.New("this home server can't restyle photos"))
+		return
+	}
+	img, err := s.images.Wait(ctx, m.ImageID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	style := []rune(strings.TrimSpace(m.Prompt))
+	req := RestyleRequest{Image: img, Seed: m.Seed}
+	if req.Seed <= 0 {
+		req.Seed = randomSeed()
+	}
+
+	select {
+	case s.agent.imageSlots <- struct{}{}:
+		defer func() { <-s.agent.imageSlots }()
+	case <-ctx.Done():
+		fail(ctx.Err())
+		return
+	}
+
+	styleText := string(style[:min(len(style), maxPromptRunes)])
+	if m.Enhance && styleText != "" {
+		described, err := s.rewrite(ctx, restyleInstructions, styleText)
+		switch {
+		case ctx.Err() != nil:
+			fail(ctx.Err())
+			return
+		case err != nil:
+			s.log.Warn("style description failed; using the style as given", "id", m.ID, "err", err)
+		case described != "":
+			styleText = described
+		}
+	}
+	req.Prompt = RestylePrompt(styleText)
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImagePrompt, ID: m.ID, Prompt: req.Prompt})
+
+	release, err := s.agent.gpu.acquire(ctx, gpuImage)
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: m.ID, Step: 0})
+	s.log.Info("restyling", "id", m.ID, "seed", req.Seed)
+	start := time.Now()
+	out, err := restyler.Restyle(ctx, req, func(step, steps int) {
+		s.send(s.chat, protocol.Peer{Type: protocol.PeerImageProgress, ID: m.ID, Step: step, Steps: steps})
+	})
+	release()
+	if err != nil {
+		fail(err)
+		return
+	}
+	s.log.Info("restyle done", "id", m.ID, "took", time.Since(start).Round(time.Millisecond), "bytes", len(out.Data))
+
+	fileID := m.ID + "-image"
+	if err := s.sendFile(ctx, fileID, out); err != nil {
+		fail(err)
+		return
+	}
+	w, h := ImageSize(out)
+	s.send(s.chat, protocol.Peer{Type: protocol.PeerImageDone, ID: m.ID, FileID: fileID, Width: w, Height: h, Seed: req.Seed})
 }
 
 // enhancePrompt asks the LLM for a detailed version of a short image idea.

@@ -75,6 +75,8 @@ type ComfyUI struct {
 	Steps      int    // FLUX schnell is distilled for 4
 	// Video is the image-to-video model's files; zero means DefaultWanVideo.
 	Video WanVideo
+	// Kontext is the photo-restyling model's files; zero means DefaultFluxKontext.
+	Kontext FluxKontext
 	// MusicCheckpoint is the ACE-Step 1.5 checkpoint; empty means DefaultMusicCheckpoint.
 	MusicCheckpoint string
 	Client          *http.Client
