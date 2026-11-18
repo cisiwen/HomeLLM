@@ -43,13 +43,16 @@ type Signal struct {
 const (
 	// home -> server: {code, expires_at}. Registers a one-time pairing code shown in a QR.
 	ActionPairOpen = "pair_open"
-	// phone -> server: {device_id, code}. Redeems a scanned QR code.
+	// phone -> server: {device_id, code}. Redeems a scanned QR code. For a typed code (see
+	// paircode.go) code is PairCodeLookup(code) and device_id may be empty.
 	ActionPair = "pair"
-	// server -> home: {request_id, user_id}. Asks the home owner to approve a pairing.
+	// server -> home: {request_id, user_id, code}. Asks the home owner to approve a pairing;
+	// code is the one redeemed, so a typed code can be approved by itself.
 	ActionPairRequest = "pair_request"
-	// home -> server: {request_id, approved}.
+	// home -> server: {request_id, approved, payload?}. payload (a PairCodeProof, for typed
+	// codes) is passed on to the phone in pair_result.
 	ActionPairResponse = "pair_response"
-	// server -> phone: {ok, device_id, name, message}.
+	// server -> phone: {ok, device_id, name, message, payload?}.
 	ActionPairResult = "pair_result"
 	// phone -> server: {}. server -> phone: {devices}. Lists the caller's paired devices.
 	ActionDevices = "devices"

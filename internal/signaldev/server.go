@@ -319,7 +319,7 @@ func (s *Server) handleHome(ctx context.Context, c *conn, msg protocol.Signal) {
 		if p == nil || p.deviceID != c.deviceID {
 			return
 		}
-		res := protocol.Signal{Action: protocol.ActionPairResult, DeviceID: c.deviceID, Name: name, OK: msg.Approved}
+		res := protocol.Signal{Action: protocol.ActionPairResult, DeviceID: c.deviceID, Name: name, OK: msg.Approved, Payload: msg.Payload}
 		if !msg.Approved {
 			res.Message = "pairing was rejected on the home server"
 		}
@@ -393,6 +393,10 @@ func (s *Server) startPairing(ctx context.Context, c *conn, msg protocol.Signal)
 	pc := s.codes[key]
 	// Single use: consumed by the first attempt, right or wrong.
 	delete(s.codes, key)
+	// A typed code (protocol.PairCodeLookup) says which device it belongs to by itself.
+	if pc != nil && msg.DeviceID == "" && protocol.IsPairCodeLookup(msg.Code) {
+		msg.DeviceID = pc.deviceID
+	}
 	home := s.homes[msg.DeviceID]
 	s.mu.Unlock()
 
@@ -419,7 +423,7 @@ func (s *Server) startPairing(ctx context.Context, c *conn, msg protocol.Signal)
 	s.mu.Lock()
 	s.pending[reqID] = p
 	s.mu.Unlock()
-	home.send(ctx, protocol.Signal{Action: protocol.ActionPairRequest, RequestID: reqID, UserID: c.userID})
+	home.send(ctx, protocol.Signal{Action: protocol.ActionPairRequest, RequestID: reqID, UserID: c.userID, Code: msg.Code})
 }
 
 func errorSignal(message, session string) protocol.Signal {

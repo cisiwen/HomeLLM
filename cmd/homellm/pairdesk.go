@@ -40,7 +40,8 @@ type approval struct {
 
 // pairDesk hands pairing approvals to an attached `homellm pair` client.
 type pairDesk struct {
-	newQR func(context.Context) (protocol.PairingQR, error)
+	newQR   func(context.Context) (protocol.PairingQR, error)
+	newCode func(context.Context) (home.PairingCode, error)
 
 	mu       sync.Mutex
 	attached time.Time // when a client last asked for a QR or polled
@@ -48,8 +49,8 @@ type pairDesk struct {
 	pending  chan *approval
 }
 
-func newPairDesk(newQR func(context.Context) (protocol.PairingQR, error)) *pairDesk {
-	return &pairDesk{newQR: newQR, waiting: map[string]*approval{}, pending: make(chan *approval)}
+func newPairDesk(newQR func(context.Context) (protocol.PairingQR, error), newCode func(context.Context) (home.PairingCode, error)) *pairDesk {
+	return &pairDesk{newQR: newQR, newCode: newCode, waiting: map[string]*approval{}, pending: make(chan *approval)}
 }
 
 // active reports whether a `homellm pair` client is currently showing a QR.
@@ -100,6 +101,17 @@ func (d *pairDesk) serve(ctx context.Context, addr string) {
 		d.touch()
 		json.NewEncoder(w).Encode(qr)
 	})
+	// A typed pairing code for the web client. Entering it is the approval, so there's
+	// nothing to wait for here.
+	mux.HandleFunc("POST /pair/code", func(w http.ResponseWriter, r *http.Request) {
+		code, err := d.newCode(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(code)
+	})
 	// Long poll: returns the next approval request, or 204 if none arrived in time.
 	mux.HandleFunc("GET /pair/next", func(w http.ResponseWriter, r *http.Request) {
 		d.touch()
@@ -138,6 +150,37 @@ func (d *pairDesk) serve(ctx context.Context, addr string) {
 	srv := &http.Server{Handler: mux}
 	go func() { <-ctx.Done(); srv.Close() }()
 	srv.Serve(ln)
+}
+
+// runCodeClient implements `homellm code`: prints a one-time pairing code to type into the
+// web client (homellm.eiuoo.com → Pair a PC). With -wait it waits for Enter before exiting,
+// for a desktop shortcut whose window would otherwise close at once.
+func runCodeClient(args []string) {
+	fs := flag.NewFlagSet("code", flag.ExitOnError)
+	addr := fs.String("control", defaultControlAddr, "the running server's control address")
+	wait := fs.Bool("wait", false, "wait for Enter before exiting")
+	fs.Parse(args)
+	defer func() {
+		if *wait {
+			fmt.Print("\nPress Enter to close.")
+			bufio.NewReader(os.Stdin).ReadString('\n')
+		}
+	}()
+	resp, err := http.Post("http://"+*addr+"/pair/code", "application/json", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot reach the HomeLLM server - is it running?", err)
+		return
+	}
+	defer resp.Body.Close()
+	var c home.PairingCode
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&c) != nil {
+		var buf bytes.Buffer
+		buf.ReadFrom(resp.Body)
+		fmt.Fprintln(os.Stderr, "The server couldn't create a pairing code:", resp.Status, strings.TrimSpace(buf.String()))
+		return
+	}
+	fmt.Printf("\nPairing code for %s:\n\n        %s\n\n", c.Name, c.Code)
+	fmt.Printf("Type it in the web app (Pair a PC). It works once, until %s.\n", time.Unix(c.ExpiresAt, 0).Format("15:04"))
 }
 
 // runPairClient implements `homellm pair`: show a QR from the running service, then handle

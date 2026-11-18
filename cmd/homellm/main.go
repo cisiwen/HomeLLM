@@ -32,6 +32,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "code" {
+		runCodeClient(os.Args[2:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "pair" {
 		runPairClient(os.Args[2:])
 		return
@@ -210,7 +214,7 @@ func main() {
 	defer stop()
 
 	if *controlAddr != "" {
-		desk = newPairDesk(agent.NewPairingQR)
+		desk = newPairDesk(agent.NewPairingQR, agent.NewPairingCode)
 		go desk.serve(ctx, *controlAddr)
 	}
 

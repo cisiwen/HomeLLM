@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeLLM</title>
+<meta name="description" content="Your home PC's AI, from anywhere">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bf0'/%3E%3Cpath d='M8 17l8-7 8 7v8h-5v-5h-6v5H8z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Sign in -->
+<section id="signin" class="center" hidden>
+  <form id="signinForm" class="card narrow">
+    <div class="logo">Home<b>LLM</b></div>
+    <p class="muted">Sign in with your AndroidStreamer account to reach your home PC.</p>
+    <label>Email or username<input id="username" autocomplete="username" required></label>
+    <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+    <div id="newPwBox" hidden>
+      <label>New password (first sign-in)<input id="newPassword" type="password" autocomplete="new-password"></label>
+    </div>
+    <button class="primary" id="signinBtn">Sign in</button>
+    <p class="err" id="signinErr"></p>
+    <p class="muted small">Your password is checked with Cognito's SRP protocol and never leaves this browser.</p>
+  </form>
+</section>
+
+<!-- App -->
+<section id="app" hidden>
+  <header>
+    <div class="logo">Home<b>LLM</b></div>
+    <select id="deviceSelect" title="Your paired PCs"></select>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText">not connected</span></span>
+    <div class="spacer"></div>
+    <button class="ghost" id="pairBtn">Pair a PC</button>
+    <span class="muted small" id="who"></span>
+    <button class="ghost" id="signoutBtn">Sign out</button>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-mode="chat" class="on">Chat</button>
+    <button data-mode="image">Image</button>
+    <button data-mode="video">Video</button>
+    <button data-mode="restyle">Restyle</button>
+  </nav>
+
+  <main id="feed"></main>
+
+  <footer id="composer">
+    <div class="attach" id="attachRow" hidden>
+      <img id="attachImg" alt="">
+      <span class="muted small" id="attachText"></span>
+      <button class="ghost small" id="attachClear">Remove</button>
+    </div>
+    <div class="opts" id="opts"></div>
+    <div class="inputRow">
+      <button class="ghost icon" id="attachBtn" title="Add a picture">＋</button>
+      <textarea id="input" rows="1" placeholder="Message your home AI…"></textarea>
+      <button class="primary" id="sendBtn">Send</button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+  </footer>
+</section>
+
+<dialog id="pairDialog">
+  <h3>Pair this browser with a PC</h3>
+  <p class="small muted">Get a pairing code on the PC: double-click <b>HomeLLM pairing code</b> on its desktop, use <b>Pairing code</b> in HomeLLM Studio, or run <code>homellm.exe code</code>. Then type it here.</p>
+  <input id="pairText" class="codeInput" placeholder="XXXXX-XXXXX" maxlength="14" autocomplete="off" autocapitalize="characters" spellcheck="false">
+  <p class="small muted" id="pairStatus"></p>
+  <div class="row end">
+    <button class="ghost" id="pairCancel">Close</button>
+    <button class="primary" id="pairGo">Pair</button>
+  </div>
+</dialog>
+
+<script src="config.js"></script>
+<script src="vendor/amazon-cognito-identity.min.js"></script>
+<script src="vendor/nacl-fast.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

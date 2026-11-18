@@ -5,6 +5,7 @@ package home
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -24,6 +25,9 @@ import (
 
 // PairingTTL is how long a pairing QR code stays valid.
 const PairingTTL = 5 * time.Minute
+
+// PairCodeTTL is how long a typed pairing code (protocol.NewPairCode) stays valid.
+const PairCodeTTL = 10 * time.Minute
 
 // Config configures an Agent.
 type Config struct {
@@ -80,6 +84,13 @@ type Agent struct {
 	mu       sync.Mutex
 	ws       *websocket.Conn // current signalling connection, nil while reconnecting
 	sessions map[string]*session
+	// pairCodes are the typed pairing codes handed out and not yet used, by their lookup.
+	pairCodes map[string]pairCode
+}
+
+type pairCode struct {
+	code    string // normalized
+	expires time.Time
 }
 
 // pingInterval is how often the agent pings signalling; a link with no pong for three
@@ -97,7 +108,8 @@ func NewAgent(cfg Config, id *Identity) *Agent {
 		cfg.MaxConcurrent = 1
 	}
 	a := &Agent{cfg: cfg, id: id, instance: randomHex(8), slots: make(chan struct{}, cfg.MaxConcurrent),
-		imageSlots: make(chan struct{}, 1), sessions: map[string]*session{}, held: map[string][]heldClip{}}
+		imageSlots: make(chan struct{}, 1), sessions: map[string]*session{}, held: map[string][]heldClip{},
+		pairCodes: map[string]pairCode{}}
 	a.gpu = newGPUArbiter(a.freeGPUFor)
 	return a
 }
@@ -224,6 +236,14 @@ func (a *Agent) send(ctx context.Context, s protocol.Signal) error {
 func (a *Agent) handle(ctx context.Context, msg protocol.Signal) {
 	switch msg.Action {
 	case protocol.ActionPairRequest:
+		if pc, ok := a.takePairCode(msg.Code); ok {
+			// Typing the code shown on this PC is the approval: only someone who can see it
+			// could have entered it. Send the public key, vouched for by the code.
+			proof, _ := json.Marshal(protocol.NewPairCodeProof(pc.code, a.id.DeviceID, a.id.PrivateKey.Public().(ed25519.PublicKey)))
+			slog.Info("pairing", "user", msg.UserID, "approved", true, "via", "code")
+			a.send(ctx, protocol.Signal{Action: protocol.ActionPairResponse, RequestID: msg.RequestID, Approved: true, Payload: proof})
+			return
+		}
 		go func() {
 			actx, cancel := context.WithTimeout(ctx, 80*time.Second)
 			defer cancel()
@@ -279,6 +299,46 @@ func (a *Agent) removeSession(s *session) {
 	if a.sessions[s.id] == s {
 		delete(a.sessions, s.id)
 	}
+}
+
+// PairingCode is a typed pairing code to show the owner.
+type PairingCode struct {
+	Code      string `json:"code"` // e.g. "7KQM2-XRD4P"
+	Name      string `json:"name"`
+	ExpiresAt int64  `json:"expires_at"` // unix seconds
+}
+
+// NewPairingCode registers a fresh typed pairing code (see protocol/paircode.go). Codes are
+// single use; any earlier unused codes stay valid until they expire.
+func (a *Agent) NewPairingCode(ctx context.Context) (PairingCode, error) {
+	code := protocol.NewPairCode()
+	norm := protocol.NormalizePairCode(code)
+	lookup := protocol.PairCodeLookup(norm)
+	expires := time.Now().Add(PairCodeTTL)
+	if err := a.send(ctx, protocol.Signal{Action: protocol.ActionPairOpen, Code: lookup, ExpiresAt: expires.Unix()}); err != nil {
+		return PairingCode{}, err
+	}
+	a.mu.Lock()
+	for k, v := range a.pairCodes {
+		if time.Now().After(v.expires) {
+			delete(a.pairCodes, k)
+		}
+	}
+	a.pairCodes[lookup] = pairCode{code: norm, expires: expires}
+	a.mu.Unlock()
+	return PairingCode{Code: code, Name: a.id.Name, ExpiresAt: expires.Unix()}, nil
+}
+
+// takePairCode consumes the typed code a pair_request redeemed, if it's one of ours.
+func (a *Agent) takePairCode(lookup string) (pairCode, bool) {
+	if !protocol.IsPairCodeLookup(lookup) {
+		return pairCode{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pc, ok := a.pairCodes[lookup]
+	delete(a.pairCodes, lookup)
+	return pc, ok && time.Now().Before(pc.expires)
 }
 
 // NewPairingQR registers a fresh one-time pairing code and returns the QR payload to show.

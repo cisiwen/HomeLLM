@@ -30,6 +30,7 @@ with **no open ports, no VPN, and no relay server in the data path**.
 | `cmd/homellm` | Home server binary |
 | `cmd/signal-dev` | Dev signalling server binary |
 | `cmd/testclient` | Plays the phone's role, for testing without a phone |
+| `web/` | The web client at https://homellm.eiuoo.com (see below) |
 | `cmd/studio` | HomeLLM Studio: a desktop playground for the PC's video and image models (see below) |
 | `cmd/tunnel-home`, `cmd/tunnel-client` | Forward a PC's localhost TCP ports over the same scheme (see "Tunnel" below) |
 | `internal/tunnel/` | The tunnel's forwarding logic |
@@ -114,6 +115,34 @@ Without a GPU, `-restyle mock` posterizes the photo, and `testclient -image phot
 `restyle {id, image_id, prompt?, enhance?, seed?}` and gets the same `image_prompt`,
 `image_progress` and `image_done` replies as `imagine`. `hello` says `restyle: true` when it's
 on.
+
+## Web client: homellm.eiuoo.com
+
+`web/` is the browser version of the app's Home AI: chat, pictures, photo → video and
+restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack` in
+`StreamerInfraStructure/cdk` (S3 + CloudFront, `npx cdk deploy HomeLlmWebStack --exclusively`).
+It signs in to the same Cognito user pool as the app (SRP, in the browser, so no hosted UI
+or callback URLs), lists PCs and sets up connections through the same signalling server, and
+then talks to the PC directly over WebRTC exactly like the phone, including checking every
+answer's signature against the PC's key. `web/config.js` holds the (public) pool, client and
+signalling URL.
+
+**Pairing with a typed code.** A browser can't scan the QR, so it pairs with a short code:
+
+```bash
+homellm code        # prints e.g. 7KQM2-XRD4P; valid once, for 10 minutes
+```
+
+(or the **HomeLLM pairing code** shortcut on the PC's desktop, which runs `homellm code -wait`,
+or **Pairing code** in HomeLLM Studio). Typing the code is the approval, so there's no y/N
+prompt. The code never travels in plain form: signalling sees only a hash, and the PC proves
+its public key with an HMAC keyed by the code, which the browser checks
+(`protocol/paircode.go`). The QR's JSON can still be pasted instead.
+
+**Same Wi-Fi as the PC:** browsers hide their local IP behind a `.local` name, so the PC has to
+accept the browser's incoming connection, which Windows Firewall blocks on a "Public" network
+unless `homellm.exe` has an inbound rule (phones share their real IP, so they don't need one).
+Away from home the browser connects like the phone does.
 
 ## HomeLLM Studio: learning image-to-video and text-to-video
 
