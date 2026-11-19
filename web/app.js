@@ -506,7 +506,16 @@ async function showApp() {
   connect();
 }
 
+function wireTextSize() {
+  const sel = $('textSize');
+  sel.innerHTML = TEXT_SIZES.map(([v, name]) => `<option value="${v}">${name}</option>`).join('');
+  sel.value = String(textSize());
+  sel.onchange = () => { store.set('textSize', Number(sel.value)); applyTextSize(); };
+  window.addEventListener('storage', (e) => { if (e.key === 'homellm.textSize') sel.value = String(textSize()); });
+}
+
 function wire() {
+  wireTextSize();
   $('signinForm').addEventListener('submit', signIn);
   $('signoutBtn').onclick = signOut;
   $('pairBtn').onclick = openPair;

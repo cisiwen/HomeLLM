@@ -45,6 +45,20 @@ function currentUserName() {
 }
 
 
+// ---------------- text size ----------------
+
+// One setting for the whole site (the main page, and the Studio / Dubbing pages and the apps in
+// their frames), kept in this browser. zoom scales text and layout together, so pages whose
+// styles use fixed pixel sizes grow evenly instead of overlapping.
+const TEXT_SIZES = [[0.9, 'Small'], [1, 'Normal'], [1.15, 'Large'], [1.3, 'Larger'], [1.5, 'Largest']];
+function textSize() { const z = Number(store.get('textSize', 1)); return TEXT_SIZES.some(([v]) => v === z) ? z : 1; }
+function applyTextSize(doc = document) {
+  try { doc.documentElement.style.zoom = String(textSize()); } catch { }
+}
+applyTextSize();
+// Changed in another tab: follow along.
+window.addEventListener('storage', (e) => { if (e.key === 'homellm.textSize') applyTextSize(); });
+
 // ---------------- signalling ----------------
 
 // openSignal opens the signalling WebSocket as a "phone". Browsers can't set headers on a

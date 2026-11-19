@@ -89,6 +89,7 @@ details.field summary { cursor: pointer; }
 .galleryHead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .galleryHead input { width: 220px; }
 .galleryHead select { width: auto; }
+header select { width: auto; padding: 3px 6px; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
 .card.sel { outline: 2px solid var(--accent); }

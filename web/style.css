@@ -34,6 +34,8 @@ code { background: var(--soft); padding: 1px 5px; border-radius: 5px; font-size:
 .row { display: flex; gap: 8px; align-items: center; }
 .row.end { justify-content: flex-end; }
 .spacer { flex: 1; }
+.sizePick { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 700; color: var(--mute); }
+.sizePick select { padding: 4px 8px; font-weight: 400; color: var(--ink); }
 .navLink { color: var(--accent); text-decoration: none; font-weight: 600; font-size: 14px; }
 
 #app { height: 100%; display: flex; flex-direction: column; }

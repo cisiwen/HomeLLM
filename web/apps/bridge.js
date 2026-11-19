@@ -119,6 +119,12 @@ async function onWorkerRequest(m, port) {
   }
 }
 
+// The app in the frame follows the site's text size too (same origin, so it's reachable).
+$('frame').addEventListener('load', () => applyTextSize($('frame').contentDocument));
+window.addEventListener('storage', (e) => {
+  if (e.key === 'homellm.textSize' && $('frame').contentDocument) applyTextSize($('frame').contentDocument);
+});
+
 function showStudio() {
   $('note').hidden = true;
   showHeader(false);

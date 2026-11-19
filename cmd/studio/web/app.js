@@ -953,6 +953,20 @@ if (EMBEDDED) {
   home.title = 'Back to HomeLLM (chat & pictures)';
   home.innerHTML = '← HomeLLM <b>Studio</b>';
   brand.replaceWith(home);
+  // HomeLLM's site-wide text size (homellm.js keeps it under the same localStorage key); the
+  // bridge page around this frame applies it when it changes.
+  const sizes = [[0.9, 'Small'], [1, 'Normal'], [1.15, 'Large'], [1.3, 'Larger'], [1.5, 'Largest']];
+  const pick = document.createElement('label');
+  pick.className = 'stat';
+  pick.title = 'Text size (this browser)';
+  pick.innerHTML = '<b>Aa</b> <select id="textSize">' + sizes.map(([v, n]) => `<option value="${v}">${n}</option>`).join('') + '</select>';
+  document.querySelector('header .spacer').before(pick);
+  const sel = pick.querySelector('select');
+  try { sel.value = String(JSON.parse(localStorage.getItem('homellm.textSize') || '1')); } catch { sel.value = '1'; }
+  sel.onchange = () => {
+    try { localStorage.setItem('homellm.textSize', JSON.stringify(Number(sel.value))); } catch { }
+    document.documentElement.style.zoom = sel.value; // at once; the bridge does the same
+  };
 }
 
 loadForm();
