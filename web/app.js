@@ -206,6 +206,7 @@ function handlers(isCurrent) {
     connected: guard((hello) => {
       caps = hello;
       $('dubLink').hidden = !(hello.apps || []).includes('dubbing');
+      $('studioLink').hidden = !(hello.apps || []).includes('studio');
       applyMode();
       waiters.forEach((w) => w.resolve(conn)); waiters = [];
     }),

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio · HomeLLM</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bf0'/%3E%3Cpath d='M8 17l8-7 8 7v8h-5v-5h-6v5H8z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="../apps/bridge.css">
+</head>
+<body data-app="studio" data-name="Studio" data-own-header>
+<header>
+  <a class="logo" href="/">Home<b>LLM</b></a>
+  <span class="crumb">Studio</span>
+  <span class="status" id="status"><span class="dot busy"></span><span id="statusText">starting…</span></span>
+  <div class="spacer"></div>
+  <a class="ghostLink" href="/">← Chat &amp; pictures</a>
+</header>
+<p id="note" class="note" hidden></p>
+<iframe id="frame" title="HomeLLM Studio" hidden></iframe>
+
+<script src="../config.js"></script>
+<script src="../vendor/amazon-cognito-identity.min.js"></script>
+<script src="../vendor/nacl-fast.min.js"></script>
+<script src="../homellm.js"></script>
+<script src="../apps/bridge.js"></script>
+</body>
+</html>

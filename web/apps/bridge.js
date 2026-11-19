@@ -1,10 +1,11 @@
 'use strict';
-// The /dubbing/ page: connects to the user's PC like the main HomeLLM page, then shows the
-// dubbing studio (/dubbing/app/) in a frame. The studio's server runs on the PC; sw.js sends
-// its api/ and media/ requests here, and this page relays them over the connection's "http"
-// data channel (HomeLLM's protocol/httprelay.go).
+// The bridge page for a web app on the user's PC (/dubbing/, /studio/): connects to the PC like
+// the main HomeLLM page, then shows the app's page (/<app>/app/) in a frame. The app's server
+// runs on the PC; /sw.js sends the page's server requests here, and this page relays them over
+// the connection's "http" data channel (HomeLLM's protocol/httprelay.go).
 
-const APP = 'dubbing';
+const APP = document.body.dataset.app;
+const APP_NAME = document.body.dataset.name || APP;
 let conn = null;
 let nextN = 1;
 const reqs = new Map(); // n -> { port }
@@ -15,7 +16,13 @@ function setStatus(kind, text) {
   $('statusText').textContent = text;
 }
 
+// Apps with their own header (Studio) get the whole window once they're showing; this page's
+// header comes back only when there's something to say (signed out, connection lost).
+const OWN_HEADER = 'ownHeader' in document.body.dataset;
+function showHeader(on) { document.querySelector('header').hidden = OWN_HEADER && !on; }
+
 function showNote(html) {
+  showHeader(true);
   $('note').innerHTML = html;
   $('note').hidden = false;
   $('frame').hidden = true;
@@ -49,8 +56,8 @@ function connect() {
     connected: (hello) => {
       if (conn !== c) return;
       if (!(hello.apps || []).includes(APP)) {
-        showNote(`Dubbing isn't switched on on ${esc(hello.name || d.name)}. Start HomeLLM there with <code>-app dubbing=http://127.0.0.1:8000</code>.`);
-        readyWaiters.forEach((w) => w.reject(new Error('dubbing is off'))); readyWaiters = [];
+        showNote(`${esc(APP_NAME)} isn't switched on on ${esc(hello.name || d.name)}. Start HomeLLM there with <code>-app ${esc(APP)}=http://127.0.0.1:…</code>.`);
+        readyWaiters.forEach((w) => w.reject(new Error(APP + ' is off'))); readyWaiters = [];
         return;
       }
       const go = () => { readyWaiters.forEach((w) => w.resolve()); readyWaiters = []; showStudio(); };
@@ -59,6 +66,7 @@ function connect() {
     disconnected: (reason) => {
       if (conn !== c) return;
       setStatus('bad', reason + ' · click to retry');
+      showHeader(true);
       readyWaiters.forEach((w) => w.reject(new Error(reason))); readyWaiters = [];
       for (const [n, r] of reqs) { r.port.postMessage({ t: 'error', message: 'connection to the PC lost' }); reqs.delete(n); }
     },
@@ -113,21 +121,26 @@ async function onWorkerRequest(m, port) {
 
 function showStudio() {
   $('note').hidden = true;
+  showHeader(false);
   const f = $('frame');
   f.hidden = false;
   if (!f.src) f.src = 'app/';
 }
 
 async function start() {
-  if (!('serviceWorker' in navigator)) { showNote('This browser can\'t run the dubbing studio (no service workers).'); return; }
+  if (!('serviceWorker' in navigator)) { showNote(`This browser can't run ${esc(APP_NAME)} (no service workers).`); return; }
   try { await idToken(); } catch {
     showNote('You\'re signed out. <a href="/">Sign in on HomeLLM</a>, then come back here.');
     return;
   }
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data?.kind === 'http' && e.ports[0]) onWorkerRequest(e.data, e.ports[0]);
+    if (e.data?.kind === 'http' && e.data.app === APP && e.ports[0]) onWorkerRequest(e.data, e.ports[0]);
   });
-  await navigator.serviceWorker.register('sw.js', { scope: '/dubbing/' });
+  // An earlier version registered its worker for /dubbing/ only; that one would shadow /sw.js.
+  for (const r of await navigator.serviceWorker.getRegistrations()) {
+    if (new URL(r.scope).pathname !== '/') await r.unregister();
+  }
+  await navigator.serviceWorker.register('/sw.js', { scope: '/' });
   await navigator.serviceWorker.ready;
   connect();
 }

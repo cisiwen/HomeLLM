@@ -1,13 +1,16 @@
 'use strict';
-// Service worker for /dubbing/. The dubbing studio's page (/dubbing/app/) is static and comes
-// from CloudFront, but its api/ and media/ requests are for the studio server on the user's PC.
-// This worker hands each of them to the /dubbing/ bridge page, which holds the WebRTC
-// connection to the PC and relays them (see bridge.js and HomeLLM's protocol/httprelay.go).
-// Responses stream back in pieces, pulled as the page reads them, so a long video plays and
-// seeks without being downloaded whole.
+// Service worker for the web apps on the user's PC (HomeLLM's protocol/httprelay.go). Each app
+// has a bridge page (/<app>/) that holds the WebRTC connection to the PC and shows the app's
+// own page (/<app>/app/, static, from CloudFront) in a frame. That page's server requests are
+// for the app's server on the PC, so this worker hands them to the bridge page, which relays
+// them (apps/bridge.js). Responses stream back in pieces, pulled as the page reads them, so a
+// long video plays and seeks without being downloaded whole. Everything else on the site
+// passes straight through.
 
-const APP_PREFIX = '/dubbing/app/';
-const RELAYED = /^(api|media)\//;
+const APPS = {
+  dubbing: /^(api|media)\//,               // video-dubbing's studio
+  studio: /^(api|comfy|ollama|runs)\//,     // HomeLLM Studio (cmd/studio)
+};
 const PULL_BYTES = 256 * 1024;
 
 self.addEventListener('install', () => self.skipWaiting());
@@ -15,25 +18,25 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin || !url.pathname.startsWith(APP_PREFIX)) return;
-  const rest = url.pathname.slice(APP_PREFIX.length);
-  if (!RELAYED.test(rest)) return; // the page's own files: CloudFront
-  event.respondWith(relay(event.request, '/' + rest + url.search));
+  if (url.origin !== self.location.origin) return;
+  const m = url.pathname.match(/^\/([a-z]+)\/app\/(.*)$/);
+  if (!m || !APPS[m[1]] || !APPS[m[1]].test(m[2])) return; // the page's own files: CloudFront
+  event.respondWith(relay(m[1], event.request, '/' + m[2] + url.search));
 });
 
-async function bridgeClient() {
+async function bridgeClient(app) {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   return all.find((c) => {
     const p = new URL(c.url).pathname;
-    return p === '/dubbing/' || p === '/dubbing/index.html';
+    return p === `/${app}/` || p === `/${app}/index.html`;
   });
 }
 
 const FORWARD = ['accept', 'content-type', 'range', 'if-none-match', 'if-modified-since', 'if-range'];
 
-async function relay(request, path) {
-  const bridge = await bridgeClient();
-  if (!bridge) return new Response('Open the Dubbing page from HomeLLM to reach your PC.', { status: 503 });
+async function relay(app, request, path) {
+  const bridge = await bridgeClient(app);
+  if (!bridge) return new Response(`Open /${app}/ on HomeLLM to reach your PC.`, { status: 503 });
   const headers = {};
   for (const h of FORWARD) { const v = request.headers.get(h); if (v) headers[h] = v; }
   const body = ['GET', 'HEAD'].includes(request.method) ? null : await request.arrayBuffer();
@@ -69,6 +72,6 @@ async function relay(request, path) {
         done = true; wake(); port1.close();
       }
     };
-    bridge.postMessage({ kind: 'http', method: request.method, path, headers, body }, body ? [port2, body] : [port2]);
+    bridge.postMessage({ kind: 'http', app, method: request.method, path, headers, body }, body ? [port2, body] : [port2]);
   });
 }
