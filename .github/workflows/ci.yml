@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  # Pushes to main run these same checks through deploy.yml, before it deploys.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # . is the home server, Studio and the tools; signal-lambda is the signalling Lambda
+        # (its own module, with the AWS SDK).
+        module: [., signal-lambda]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  web:
+    name: Web pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Plain scripts with no build step: at least make sure each one parses.
+      - run: for f in web/*.js web/apps/*.js cmd/studio/web/*.js; do node --check "$f"; done
+
+  cdk:
+    name: CDK type-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/cdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cdk/package-lock.json
+
+      - run: npm ci
+      - run: npx tsc --noEmit

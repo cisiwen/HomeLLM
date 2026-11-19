@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  # Also run by hand, e.g. after video-dubbing's page changed (the web stack publishes it).
+  workflow_dispatch:
+
+# Never run two deploys at once; queue the next one instead of cancelling mid-deploy.
+concurrency:
+  group: deploy-homellm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  # Created by EiuooGithubOidcStack (eiuoo.com repo). It can only assume the CDK bootstrap
+  # roles (cdk-hnb659fds-*), and only for runs on main of the repos it trusts.
+  DEPLOY_ROLE_ARN: arn:aws:iam::323455446472:role/eiuoo-github-deploy
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  # The two stacks are independent: each is deployed on its own (--exclusively), so a failure
+  # in one never blocks or rolls back the other.
+  cdk:
+    name: Deploy ${{ matrix.stack }}
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # lets the job request a GitHub OIDC token for AWS
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [HomeLlmStack, HomeLlmWebStack]
+    defaults:
+      run:
+        working-directory: HomeLLM/deploy/cdk
+    steps:
+      # Side by side, as on a dev machine: the web stack also publishes video-dubbing's page
+      # (static/), from ../video-dubbing next to this repo. Both repos are public.
+      - uses: actions/checkout@v4
+        with:
+          path: HomeLLM
+      - uses: actions/checkout@v4
+        with:
+          repository: cisiwen/video-dubbing
+          path: video-dubbing
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: HomeLLM/deploy/cdk/package-lock.json
+
+      # GoFunction compiles the signalling Lambda with the local Go toolchain during synth
+      # (otherwise it falls back to a much slower Docker build).
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: HomeLLM/signal-lambda/go.mod
+          cache: false
+
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: npx cdk deploy ${{ matrix.stack }} --exclusively --require-approval never
+
+  # The PC side can't be deployed from here (nothing on it is reachable from the internet), so
+  # build the Windows binaries for copying over: homellm.exe and homellm-studio.exe.
+  windows:
+    name: Windows binaries
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: |
+          GOOS=windows GOARCH=amd64 go build -o dist/homellm.exe ./cmd/homellm
+          GOOS=windows GOARCH=amd64 go build -o dist/homellm-studio.exe ./cmd/studio
+          cp deploy/install-windows.ps1 deploy/install-studio-windows.ps1 dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homellm-windows-${{ github.sha }}
+          path: dist/
+          retention-days: 30
