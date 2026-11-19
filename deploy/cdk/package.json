@@ -1,11 +1,11 @@
 {
-  "name": "homellm-web-cdk",
+  "name": "homellm-cdk",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "synth": "cdk synth",
-    "deploy": "cdk deploy HomeLlmWebStack",
-    "diff": "cdk diff HomeLlmWebStack"
+    "deploy": "cdk deploy",
+    "diff": "cdk diff"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -14,6 +14,7 @@
     "typescript": "~5.6.0"
   },
   "dependencies": {
+    "@aws-cdk/aws-lambda-go-alpha": "2.262.1-alpha.0",
     "aws-cdk-lib": "2.262.1",
     "constructs": "^10.0.0"
   }

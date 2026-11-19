@@ -31,10 +31,11 @@ with **no open ports, no VPN, and no relay server in the data path**.
 | `cmd/signal-dev` | Dev signalling server binary |
 | `cmd/testclient` | Plays the phone's role, for testing without a phone |
 | `web/` | The web client at https://homellm.eiuoo.com (see below) |
+| `signal-lambda/` | The production signalling server (an AWS Lambda; its own Go module) |
 | `cmd/studio` | HomeLLM Studio: a desktop playground for the PC's video and image models (see below) |
 | `cmd/tunnel-home`, `cmd/tunnel-client` | Forward a PC's localhost TCP ports over the same scheme (see "Tunnel" below) |
 | `internal/tunnel/` | The tunnel's forwarding logic |
-| `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley, Studio); `deploy/web-cdk` hosts the web client |
+| `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley, Studio); `deploy/cdk` is HomeLLM's AWS side (signalling + web client) |
 
 Android side: `AndroidStreamer/app/src/main/java/com/androidstreamer/app/homellm/`
 (menu: **+ → Home AI**).
@@ -119,12 +120,12 @@ on.
 ## Web client: homellm.eiuoo.com
 
 `web/` is the browser version of the app's Home AI: chat, pictures, photo → video and
-restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack`, the CDK app in
-`deploy/web-cdk` (S3 + CloudFront + Route 53). It also publishes Studio's page and
+restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack` in `deploy/cdk`
+(S3 + CloudFront + Route 53). It also publishes Studio's page and
 video-dubbing's (checked out next to this repo), so deploy from a machine with both:
 
 ```bash
-cd deploy/web-cdk && npm ci && npx cdk deploy HomeLlmWebStack
+cd deploy/cdk && npm ci && npx cdk deploy HomeLlmWebStack
 ```
 
 It signs in to the same Cognito user pool as the app (SRP, in the browser, so no hosted UI
@@ -204,10 +205,17 @@ that needs different ones.
 
 ## Production signalling
 
-The real signalling server is `HomeLlmStack` in `StreamerInfraStructure/cdk`
-(`lambda-homellm`: API Gateway WebSocket + Lambda + DynamoDB). It checks each home server's
+The real signalling server is `HomeLlmStack` in `deploy/cdk` (`signal-lambda/`: API Gateway
+WebSocket + Lambda + DynamoDB). It checks each home server's
 device secret and each phone's Cognito ID token at `$connect`. The message protocol is the
 same as `signal-dev`'s, so nothing here changes between the two.
+
+```bash
+cd deploy/cdk && npm ci && npx cdk deploy HomeLlmStack   # needs AWS credentials for the account below
+```
+
+It shares only the Cognito user pool with the streaming app (`CognitoInfraStack` in
+StreamerInfraStructure publishes its IDs to SSM, where `HomeLlmStack` reads them).
 
 | Value | Current deployment (AWS account 323455446472, ap-southeast-2) |
 |---|---|

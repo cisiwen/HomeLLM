@@ -48,7 +48,7 @@ function currentUserName() {
 // ---------------- signalling ----------------
 
 // openSignal opens the signalling WebSocket as a "phone". Browsers can't set headers on a
-// WebSocket, so the ID token goes in the idToken query parameter, which lambda-homellm accepts.
+// WebSocket, so the ID token goes in the idToken query parameter, which signal-lambda accepts.
 async function openSignal(url, onMessage) {
   const token = await idToken();
   const ws = new WebSocket(`${url}${url.includes('?') ? '&' : '?'}role=phone&idToken=${encodeURIComponent(token)}`);
