@@ -34,7 +34,7 @@ with **no open ports, no VPN, and no relay server in the data path**.
 | `cmd/studio` | HomeLLM Studio: a desktop playground for the PC's video and image models (see below) |
 | `cmd/tunnel-home`, `cmd/tunnel-client` | Forward a PC's localhost TCP ports over the same scheme (see "Tunnel" below) |
 | `internal/tunnel/` | The tunnel's forwarding logic |
-| `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley) |
+| `deploy/` | Windows installers (HomeLLM, tunnel, ComfyUI, Foley, Studio); `deploy/web-cdk` hosts the web client |
 
 Android side: `AndroidStreamer/app/src/main/java/com/androidstreamer/app/homellm/`
 (menu: **+ → Home AI**).
@@ -119,9 +119,14 @@ on.
 ## Web client: homellm.eiuoo.com
 
 `web/` is the browser version of the app's Home AI: chat, pictures, photo → video and
-restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack` in
-`StreamerInfraStructure/cdk` (S3 + CloudFront; its own CDK app, since it reads this repo's and
-video-dubbing's files: `npx cdk deploy HomeLlmWebStack --app "npx ts-node --prefer-ts-exts bin/homellm-web.ts"`).
+restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack`, the CDK app in
+`deploy/web-cdk` (S3 + CloudFront + Route 53). It also publishes Studio's page and
+video-dubbing's (checked out next to this repo), so deploy from a machine with both:
+
+```bash
+cd deploy/web-cdk && npm ci && npx cdk deploy HomeLlmWebStack
+```
+
 It signs in to the same Cognito user pool as the app (SRP, in the browser, so no hosted UI
 or callback URLs), lists PCs and sets up connections through the same signalling server, and
 then talks to the PC directly over WebRTC exactly like the phone, including checking every

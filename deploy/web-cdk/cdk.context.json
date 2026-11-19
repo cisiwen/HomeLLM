@@ -1,0 +1,11 @@
+{
+  "availability-zones:account=323455446472:region=ap-southeast-2": [
+    "ap-southeast-2a",
+    "ap-southeast-2b",
+    "ap-southeast-2c"
+  ],
+  "hosted-zone:account=323455446472:domainName=eiuoo.com:region=ap-southeast-2": {
+    "Id": "/hostedzone/Z03834176TJCN73W1E83",
+    "Name": "eiuoo.com."
+  }
+}

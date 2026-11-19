@@ -1,0 +1,12 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/homellm-web.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["node_modules", "cdk.out", "dist", "**/*.d.ts", "**/*.js"]
+  },
+  "context": {
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "hostedZoneDomain": "eiuoo.com",
+    "certificateArn": "arn:aws:acm:us-east-1:323455446472:certificate/0e597aac-561d-4077-b3e3-7fd4b5b378df"
+  }
+}
