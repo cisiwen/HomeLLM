@@ -120,7 +120,8 @@ on.
 
 `web/` is the browser version of the app's Home AI: chat, pictures, photo → video and
 restyle. It's plain static files (no build step) hosted by `HomeLlmWebStack` in
-`StreamerInfraStructure/cdk` (S3 + CloudFront, `npx cdk deploy HomeLlmWebStack --exclusively`).
+`StreamerInfraStructure/cdk` (S3 + CloudFront; its own CDK app, since it reads this repo's and
+video-dubbing's files: `npx cdk deploy HomeLlmWebStack --app "npx ts-node --prefer-ts-exts bin/homellm-web.ts"`).
 It signs in to the same Cognito user pool as the app (SRP, in the browser, so no hosted UI
 or callback URLs), lists PCs and sets up connections through the same signalling server, and
 then talks to the PC directly over WebRTC exactly like the phone, including checking every
