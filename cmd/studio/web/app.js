@@ -194,7 +194,7 @@ function updateSweepLabel() {
 
 async function loadModels() {
   try {
-    const get = async (cls) => (await (await fetch('/comfy/object_info/' + cls)).json())[cls].input.required;
+    const get = async (cls) => (await (await fetch('comfy/object_info/' + cls)).json())[cls].input.required;
     const [u, l, c] = await Promise.all([get('UNETLoader'), get('LoraLoaderModelOnly'), get('CheckpointLoaderSimple')]);
     available = { unets: new Set(u.unet_name[0]), loras: new Set(l.lora_name[0]), ckpts: new Set(c.ckpt_name[0]) };
   } catch { available = null; }
@@ -346,7 +346,7 @@ async function uploadStart() {
   const ext = startImage.blob.type === 'image/png' ? 'png' : 'jpg';
   fd.append('image', startImage.blob, `studio-${Date.now()}.${ext}`);
   fd.append('overwrite', 'true');
-  const r = await fetch('/comfy/upload/image', { method: 'POST', body: fd });
+  const r = await fetch('comfy/upload/image', { method: 'POST', body: fd });
   if (!r.ok) throw new Error('Uploading the start image failed: ' + r.status);
   const j = await r.json();
   startImage.uploaded = j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
@@ -403,14 +403,14 @@ async function freeIfSwitching(m) {
   const need = FAMILIES[m];
   if (lastFamilies && need.every((f) => lastFamilies.includes(f))) return;
   lastFamilies = need;
-  await fetch('/comfy/free', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  await fetch('comfy/free', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ unload_models: true, free_memory: true }) }).catch(() => { });
 }
 
 async function queue(p) {
   const workflow = buildWorkflow(p);
   await freeIfSwitching(p.mode);
-  const r = await fetch('/comfy/prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  const r = await fetch('comfy/prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: workflow, client_id: clientId }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.prompt_id) {
@@ -433,7 +433,7 @@ async function adoptPending() {
   const pending = store.get('pending', []);
   if (!pending.length) return;
   let q = { queue_running: [], queue_pending: [] };
-  try { q = await (await fetch('/comfy/queue')).json(); } catch { return; }
+  try { q = await (await fetch('comfy/queue')).json(); } catch { return; }
   const live = new Set([...q.queue_running, ...q.queue_pending].map((e) => e[1]));
   for (const p of pending) {
     const job = { ...p, status: live.has(p.promptId) ? 'queued' : 'saving', nodes: {}, current: null, progress: null };
@@ -445,7 +445,7 @@ async function adoptPending() {
 
 async function cancel(job) {
   const running = job.status === 'running';
-  await fetch(running ? '/comfy/interrupt' : '/comfy/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  await fetch(running ? 'comfy/interrupt' : 'comfy/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(running ? { prompt_id: job.promptId } : { delete: [job.promptId] }) }).catch(() => { });
   jobs.delete(job.promptId);
   savePending();
@@ -454,16 +454,17 @@ async function cancel(job) {
 
 // ---------- progress ----------
 
+// ComfyUI's progress messages, through the studio server as server-sent events (plain HTTP,
+// so this also works through HomeLLM's relay). EventSource reconnects by itself.
 function connectWS() {
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/comfy/ws?clientId=${clientId}`);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { if (wsDropped) { wsDropped = false; reconcile(); } };
-  ws.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) return onPreview(ev.data);
+  const es = new EventSource(`api/events?clientId=${encodeURIComponent(clientId)}`);
+  es.onopen = () => { if (wsDropped) { wsDropped = false; reconcile(); } };
+  es.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     onEvent(m.type, m.data || {});
   };
-  ws.onclose = () => { wsDropped = true; setTimeout(connectWS, 2000); };
+  es.addEventListener('preview', (ev) => onPreview(Uint8Array.from(atob(ev.data), (c) => c.charCodeAt(0)).buffer));
+  es.onerror = () => { wsDropped = true; };
 }
 let wsDropped = false;
 
@@ -471,12 +472,12 @@ let wsDropped = false;
 // out what became of each job: still queued, finished meanwhile, or lost.
 async function reconcile() {
   let q;
-  try { q = await (await fetch('/comfy/queue')).json(); } catch { return; }
+  try { q = await (await fetch('comfy/queue')).json(); } catch { return; }
   const live = new Set([...q.queue_running, ...q.queue_pending].map((e) => e[1]));
   for (const job of [...jobs.values()]) {
     if (live.has(job.promptId) || job.status === 'failed' || job.status === 'saving') continue;
     let h = {};
-    try { h = await (await fetch('/comfy/history/' + job.promptId)).json(); } catch { }
+    try { h = await (await fetch('comfy/history/' + job.promptId)).json(); } catch { }
     const st = h[job.promptId]?.status;
     if (st?.completed) { job.endedAt = Date.now(); finish(job); continue; }
     job.status = 'failed';
@@ -569,7 +570,7 @@ async function finish(job) {
   const meta = { mode: p.mode, params: p, workflow: job.workflow, queuedAt: job.queuedAt };
   if (job.startedAt) meta.timing = timing(job);
   try {
-    const r = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const r = await fetch('api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: job.id, promptId: job.promptId, startImage: p.startImage || '', meta }) });
     if (!r.ok) throw new Error(await r.text());
     const saved = await r.json();
@@ -634,7 +635,7 @@ const modeName = (m) => ({ i2v: 'Image → Video', t2v: 'Text → Video', chain:
 // ---------- gallery ----------
 
 async function loadRuns() {
-  try { runs = await (await fetch('/api/runs')).json(); } catch { runs = []; }
+  try { runs = await (await fetch('api/runs')).json(); } catch { runs = []; }
   renderGallery();
 }
 
@@ -671,7 +672,7 @@ function mainFile(r) {
   const f = r.files || [];
   return f.find((x) => x.kind === 'video') || f.find((x) => x.node === 'out') || f[0];
 }
-const fileUrl = (r, name) => `/runs/${encodeURIComponent(r.id)}/${encodeURIComponent(name)}`;
+const fileUrl = (r, name) => `runs/${encodeURIComponent(r.id)}/${encodeURIComponent(name)}`;
 
 function renderGallery() {
   const q = $('filter').value.trim().toLowerCase(), mf = $('modeFilter').value;
@@ -699,7 +700,7 @@ function renderGallery() {
           ${f?.kind === 'image' || first ? '<button class="ghost" data-act="useStart">Use as start image</button>' : ''}
           <button class="ghost" data-act="workflow">Workflow</button>
           ${f ? `<a href="${fileUrl(r, f.name)}" download="${esc(r.id + '-' + f.name)}"><button class="ghost">Download</button></a>` : ''}
-          <button class="ghost" data-act="reveal">Show in Finder</button>
+          ${EMBEDDED ? '' : '<button class="ghost" data-act="reveal">Show in Finder</button>'}
           <button class="ghost" data-act="delete">Delete</button>
         </div>
       </div></article>`;
@@ -756,10 +757,10 @@ async function onCardAction(r, act, btn) {
     return;
   }
   if (act === 'workflow') return showWorkflow(r.workflow, `Workflow · ${r.id}`);
-  if (act === 'reveal') return fetch('/api/reveal?id=' + encodeURIComponent(r.id), { method: 'POST' });
+  if (act === 'reveal') return fetch('api/reveal?id=' + encodeURIComponent(r.id), { method: 'POST' });
   if (act === 'delete') {
     if (!confirm('Delete this run and its files?')) return;
-    await fetch('/api/runs/' + encodeURIComponent(r.id), { method: 'DELETE' });
+    await fetch('api/runs/' + encodeURIComponent(r.id), { method: 'DELETE' });
     runs = runs.filter((x) => x.id !== r.id);
     selected.delete(r.id);
     renderGallery();
@@ -798,7 +799,7 @@ function syncPlay() {
 async function pollStatus() {
   let ok = false;
   try {
-    const s = await (await fetch('/api/status')).json();
+    const s = await (await fetch('api/status')).json();
     const t = s.tunnel || '';
     ok = t === 'up' || t === 'direct';
     $('connText').textContent = ok ? `connected to ${s.host}` : t.startsWith('down') ? `no connection: ${t.slice(6) || 'ssh exited'}` : 'connecting to ' + s.host + '…';
@@ -806,7 +807,7 @@ async function pollStatus() {
   let comfy = false;
   if (ok) {
     try {
-      const st = await (await fetch('/comfy/system_stats')).json();
+      const st = await (await fetch('comfy/system_stats')).json();
       const d = st.devices?.[0];
       if (d) {
         const used = d.vram_total - d.vram_free;
@@ -816,7 +817,7 @@ async function pollStatus() {
       comfy = true;
     } catch { $('connText').textContent += ' · ComfyUI not answering'; }
     try {
-      const ps = await (await fetch('/ollama/api/ps')).json();
+      const ps = await (await fetch('ollama/api/ps')).json();
       const names = (ps.models || []).map((m) => m.name);
       $('llmText').textContent = names.length ? names.join(', ') : 'none loaded';
       $('unloadLlm').disabled = !names.length;
@@ -827,8 +828,8 @@ async function pollStatus() {
 }
 
 async function unloadLlm() {
-  const ps = await (await fetch('/ollama/api/ps')).json();
-  await Promise.all((ps.models || []).map((m) => fetch('/ollama/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  const ps = await (await fetch('ollama/api/ps')).json();
+  await Promise.all((ps.models || []).map((m) => fetch('ollama/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: m.name, keep_alive: 0 }) })));
   pollStatus();
 }
@@ -918,7 +919,7 @@ function wire() {
     $('codeText').textContent = '…'; $('codeNote').textContent = '';
     $('codeDialog').showModal();
     try {
-      const r = await fetch('/api/pair-code', { method: 'POST' });
+      const r = await fetch('api/pair-code', { method: 'POST' });
       if (!r.ok) throw new Error(await r.text());
       const c = await r.json();
       $('codeText').textContent = c.code;
@@ -926,15 +927,32 @@ function wire() {
     } catch (e) { $('codeText').textContent = '–'; $('codeNote').textContent = e.message; }
   });
   $('codeClose').addEventListener('click', () => $('codeDialog').close());
-  $('freeVram').addEventListener('click', () => fetch('/comfy/free', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  $('freeVram').addEventListener('click', () => fetch('comfy/free', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ unload_models: true, free_memory: true }) }).then(pollStatus));
-  $('openFolder').addEventListener('click', () => fetch('/api/reveal', { method: 'POST' }));
+  $('openFolder').addEventListener('click', () => fetch('api/reveal', { method: 'POST' }));
   $('quit').addEventListener('click', async () => {
     if (jobs.size && !confirm('Runs are still queued. Their results will stay on the PC but not be saved here. Quit anyway?')) return;
-    await fetch('/api/quit', { method: 'POST' }).catch(() => { });
+    await fetch('api/quit', { method: 'POST' }).catch(() => { });
     document.body.innerHTML = '<p class="empty">HomeLLM Studio stopped. You can close this window.</p>';
     window.close();
   });
+}
+
+// Inside HomeLLM's web page (homellm.eiuoo.com/studio/) the studio runs on the PC itself:
+// there's no Finder to show and no app to quit from here.
+const EMBEDDED = window.top !== window;
+if (EMBEDDED) {
+  document.body.classList.add('embedded');
+  ['openFolder', 'quit'].forEach((id) => { $(id).hidden = true; });
+  // The only header on homellm.eiuoo.com/studio/: its title leads back to HomeLLM.
+  const brand = document.querySelector('header .brand');
+  const home = document.createElement('a');
+  home.className = 'brand';
+  home.href = '/';
+  home.target = '_top';
+  home.title = 'Back to HomeLLM (chat & pictures)';
+  home.innerHTML = '← HomeLLM <b>Studio</b>';
+  brand.replaceWith(home);
 }
 
 loadForm();

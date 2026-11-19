@@ -148,10 +148,10 @@ homellm ... -app dubbing=http://127.0.0.1:8000   # repeatable; loopback URLs onl
 
 hello lists the app names, and the client opens a third data channel, `http`, that multiplexes
 requests with credit-based flow control, so a long video only streams as fast as the browser
-reads it (`protocol/httprelay.go`, `internal/home/httprelay.go`). `web/dubbing/` uses it for the
-dubbing studio (video-dubbing repo): CloudFront serves the studio's page at `/dubbing/app/`, a
-service worker (`web/dubbing/sw.js`) hands its `api/` and `media/` requests to the `/dubbing/`
-page, and that page relays them to the PC. Throughput is whatever the PC can upload: on its
+reads it (`protocol/httprelay.go`, `internal/home/httprelay.go`). `/dubbing/` (the video-dubbing repo's
+studio) and `/studio/` (HomeLLM Studio) use it: CloudFront serves each app's page at `/<app>/app/`,
+the site's service worker (`web/sw.js`) hands that page's server requests to the `/<app>/` bridge
+page (`web/apps/bridge.js`), and the bridge relays them to the PC. Throughput is whatever the PC can upload: on its
 Wi-Fi that's currently about 0.4 MB/s, so long videos take a few seconds to seek.
 
  browsers hide their local IP behind a `.local` name, so the PC has to
@@ -177,7 +177,14 @@ PC, and saves runs in `~/HomeLLM Studio/runs/<id>/` (`meta.json` + the files). B
 deploy/build-studio-mac.sh cisiwen@192.168.1.120   # -> ~/Applications/HomeLLM Studio.app
 ```
 
-or run it directly with `go run ./cmd/studio -host user@pc` (`-comfy http://127.0.0.1:8188`
+It also runs on the PC itself, for use from anywhere at https://homellm.eiuoo.com/studio/: build
+`homellm-studio.exe` (`GOOS=windows go build -o homellm-studio.exe ./cmd/studio`), run
+`deploy/install-studio-windows.ps1` next to it (a boot task on 127.0.0.1:8777, runs in
+`D:\HomeLLM-Studio`), and start HomeLLM with `-app studio=http://127.0.0.1:8777`. Progress comes
+from `/api/events` (server-sent events) rather than ComfyUI's WebSocket, so it works through the
+relay; runs made there are kept on the PC, separate from the Mac app's.
+
+Or run it directly with `go run ./cmd/studio -host user@pc` (`-comfy http://127.0.0.1:8188`
 on the PC itself). `ssh user@pc` must work without a password prompt.
 
 Text-to-video needs four more files in ComfyUI's models folders (about 31 GB):

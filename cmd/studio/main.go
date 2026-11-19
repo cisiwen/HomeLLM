@@ -11,12 +11,15 @@
 package main
 
 import (
+	"encoding/base64"
+
 	"context"
 	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/coder/websocket"
 	"io"
 	"io/fs"
 	"log"
@@ -79,6 +82,10 @@ func main() {
 		s.ollama = mustURL(*ollamaURL)
 		s.control = mustURL(*controlURL)
 		s.setTunnel("direct")
+		// No SSH host in direct mode: name this machine instead ("connected to DESKTOP-…").
+		if h, err := os.Hostname(); err == nil {
+			s.host = h
+		}
 	} else {
 		cp, op, hp := freePort(), freePort(), freePort()
 		s.comfy = mustURL(fmt.Sprintf("http://127.0.0.1:%d", cp))
@@ -94,6 +101,7 @@ func main() {
 	mux.Handle("/ollama/", s.proxy("/ollama", func() *url.URL { return s.ollama }))
 	mux.Handle("/runs/", http.StripPrefix("/runs/", http.FileServer(http.Dir(runsDir))))
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("POST /api/pair-code", s.pairCode)
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.saveRun)
@@ -213,6 +221,76 @@ func (s *studio) proxy(prefix string, target func() *url.URL) http.Handler {
 		}
 		rp.ServeHTTP(w, r)
 	})
+}
+
+// events streams ComfyUI's progress messages for one client as server-sent events: text
+// messages as "data:", binary preview frames base64-encoded as "event: preview". Plain HTTP,
+// unlike ComfyUI's own WebSocket, so it also works through HomeLLM's web-app relay (the studio
+// at homellm.eiuoo.com/studio/).
+func (s *studio) events(w http.ResponseWriter, r *http.Request) {
+	clientID := r.URL.Query().Get("clientId")
+	if !idRe.MatchString(clientID) {
+		http.Error(w, "bad clientId", http.StatusBadRequest)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	wsURL := strings.Replace(s.comfy.String(), "http", "ws", 1) + "/ws?clientId=" + url.QueryEscape(clientID)
+	ws, _, err := websocket.Dial(r.Context(), wsURL, nil)
+	if err != nil {
+		http.Error(w, "ComfyUI not reachable: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer ws.CloseNow()
+	ws.SetReadLimit(64 << 20)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
+	var mu sync.Mutex
+	write := func(f string, a ...any) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, err := fmt.Fprintf(w, f, a...); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	// A comment now and then keeps proxies (and the relay) from timing the stream out.
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-t.C:
+				if !write(": ping\n\n") {
+					return
+				}
+			}
+		}
+	}()
+	for {
+		typ, data, err := ws.Read(r.Context())
+		if err != nil {
+			return
+		}
+		if typ == websocket.MessageBinary {
+			if !write("event: preview\ndata: %s\n\n", base64.StdEncoding.EncodeToString(data)) {
+				return
+			}
+		} else if !write("data: %s\n\n", strings.ReplaceAll(string(data), "\n", " ")) {
+			return
+		}
+	}
 }
 
 // pairCode asks HomeLLM on the PC for a one-time code to pair a browser with (homellm
